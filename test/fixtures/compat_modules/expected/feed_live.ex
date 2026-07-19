@@ -1,0 +1,1335 @@
+defmodule Bonfire.UI.Social.FeedLive do
+  use Bonfire.UI.Common.Web, :live_component
+  use_if_enabled(Bonfire.UI.Common.Web.Native, :live_component)
+  import Untangle
+
+  alias Bonfire.Social.FeedFilters
+  alias Bonfire.UI.Social.ActivityLive
+  alias Bonfire.Social.Feeds.LiveHandler
+  alias Bonfire.UI.Common.LoadMoreLive
+
+  prop feed_name, :any, default: nil
+  prop feed_id, :any, default: nil
+  prop feed_ids, :any, default: nil
+  prop feed, :any, default: nil
+  prop subject_user, :any, default: nil
+
+  prop page_info, :any, default: nil
+  prop previous_page_info, :any, default: nil
+  prop hide_guest_fallback, :boolean, default: false
+
+  prop loading, :boolean, default: true
+  prop reloading, :boolean, default: false
+
+  prop cache_strategy, :any, default: nil
+  prop hide_activities, :any, default: nil
+  prop hide_actions, :any, default: false
+
+  prop feedback_title, :string, default: nil
+  prop feedback_message, :string, default: nil
+
+  prop showing_within, :atom, default: nil
+
+  prop hide_load_more, :boolean, default: false
+  prop enable_marker, :boolean, default: false
+
+  prop verb_default, :string, default: nil
+
+  prop page_title, :string, default: nil
+  prop feed_title, :string, default: nil
+
+  @doc "What LiveHandler and/or event name to send the patch event to for tabs navigation (if any)"
+  # "select_tab"
+  prop event_handler, :string, default: nil
+  # FIXME: should optimise by LinkPatchLive but currently not working
+  prop tab_link_component, :atom, default: LinkLive
+
+  prop current_url, :any, default: nil
+  prop tab_path_prefix, :string, default: "?tab="
+  prop tab_path_suffix, :string, default: nil
+  prop hide_filters, :boolean, default: false
+  prop selected_tab, :any, default: nil
+  prop top_page, :any, default: nil
+  prop show_back_button, :boolean, default: false
+
+  prop tabs_class, :css_class, default: nil
+
+  prop tab_class, :css_class,
+    default:
+      "flex flex-1 pt-4 px-2 text-base capitalize hover:bg-base-content hover:bg-opacity-10 place-content-center lined_tab"
+
+  prop item_class, :css_class,
+    default: "text-muted text-sm pb-4 border-b-4 border-transparent font-medium"
+
+  prop tab_primary_class, :css_class, default: nil
+
+  prop activity_class, :string, default: nil
+  prop feed_filters, :any, default: nil
+  # prop time_limit, :any, default: nil
+  # prop sort_order, :any, default: false
+  prop activity_preloads, :tuple, default: {nil, nil}
+
+  prop fresh_ids, :any, default: nil
+  prop feed_count, :any, default: nil
+  prop resumed_from_marker, :any, default: nil
+  data jumping_to_newest, :boolean, default: false
+  prop deferred_join_multiply_limit, :any, default: nil
+  prop cute_gif, :any, default: nil
+  prop custom_preview, :any, default: nil
+
+  slot bottom_or_empty_feed
+
+  def mount(%Phoenix.LiveView.Socket{} = socket) do
+    # FIXME: assigns not available in mount
+    # feed_id = e(assigns(socket), :feed_name, nil) || e(assigns(socket), :feed_id, nil) || e(assigns(socket), :id, nil)
+    {
+      :ok,
+      socket
+      |> stream_configure(:feed, dom_id: &stream_id("fa", &1))
+      |> stream(:feed, [])
+      |> assign(cute_gif: maybe_cute_gif())
+
+      #  temporary_assigns: [
+      #    feed: []
+      #  ]
+    }
+  end
+
+  # TEMP for LVN
+  def mount(socket_or_assigns) do
+    {
+      :ok,
+      socket_or_assigns
+      |> assign(cute_gif: maybe_cute_gif())
+    }
+  end
+
+  defp stream_id(feed_id, entry) do
+    entry_id =
+      id(entry) || e(entry, :activity, :id, nil) || e(entry, :object, :id, nil) ||
+        e(entry, :edge, :id, nil)
+
+    # Ensure we always have a deterministic ID, fallback to hash of entry content if no ID
+    final_id =
+      if entry_id,
+        do: entry_id,
+        else: :erlang.phash2(entry, 1_000_000)
+
+    "#{feed_id}_#{final_id}"
+  end
+
+  # consolidate different kinds of lists/feeds into Activity
+  defp get_activity(%{__struct__: Bonfire.Data.Social.Activity} = activity),
+    do: activity
+
+  defp get_activity(%{activity: %{id: _} = activity, edge: %{id: _} = edge}),
+    do: merge_structs_as_map(activity, edge)
+
+  defp get_activity(%{edge: %{id: _, activity: %{id: _} = activity} = edge}),
+    do: merge_structs_as_map(activity, edge)
+
+  defp get_activity(%{activity: %{id: _} = activity}), do: activity
+  defp get_activity(%{edge: %{id: _} = activity}), do: activity
+  defp get_activity(activity), do: activity
+
+  @doc "Check if a feed entry is in the fresh_ids set (newly arrived via PubSub)"
+  def fresh_entry?(nil, _entry), do: false
+
+  def fresh_entry?(fresh_ids, entry) do
+    entry_id =
+      id(entry) || e(entry, :activity, :id, nil) ||
+        e(entry, :object, :id, nil) || e(entry, :edge, :id, nil)
+
+    entry_id && MapSet.member?(fresh_ids, entry_id)
+  end
+
+  def tabs(_page, context) do
+    # disabled hiding of remote tab because it is also useful to find remote activities that were looked up manually
+    # case Bonfire.Social.federating?(current_user(context)) do
+    #   true ->
+    # if current_user_id(context) do
+    if module_enabled?(Bonfire.Social.Pins, context) and
+         Bonfire.Common.Settings.get(
+           [Bonfire.UI.Social.FeedsLive, :curated],
+           false,
+           context: context,
+           name: l("Show Curated Tab"),
+           description: l("Show a curated feed tab on the feed page.")
+         ) do
+      [
+        my: l("Following"),
+        curated: l("Curated"),
+        local: l("Local"),
+        fediverse: l("Remote")
+      ]
+    else
+      [
+        my: l("Following"),
+        explore: l("All"),
+        local: l("Local"),
+        fediverse: l("Remote")
+      ]
+    end
+
+    # else
+
+    #   [curated: l("Curated"), local: l("Local"), fediverse: l("Remote")]
+    # end
+  end
+
+  # Replaced @decorate time() with time_section for profiler dashboard integration
+  def update(assigns, socket) do
+    import Bonfire.UI.Common.Timing
+
+    time_section :lv_feed_component do
+      do_update(assigns, socket)
+    end
+  end
+
+  defp do_update(%{insert_stream: %{feed: _}, feed_load_ref: incoming_ref} = assigns, socket)
+       when is_integer(incoming_ref) do
+    current_ref = assigns(socket)[:feed_load_ref]
+
+    # refs are monotonic integers: only drop results STRICTLY OLDER than the latest known
+    # load (a newer load was started while this one ran, e.g. rapid filter changes racing
+    # the slower initial load — applying it would clobber the newer load's results).
+    # Results from the latest-or-newer load always apply, so the feed can never get stuck
+    # waiting on a result that was dropped by mistake.
+    if is_nil(current_ref) or incoming_ref >= current_ref do
+      do_insert_stream(assigns, socket)
+    else
+      debug(incoming_ref, "dropping stale async feed result, current ref: #{current_ref}")
+      {:ok, socket}
+    end
+  end
+
+  defp do_update(%{insert_stream: %{feed: _}} = assigns, socket) do
+    do_insert_stream(assigns, socket)
+  end
+
+  defp do_insert_stream(%{insert_stream: %{feed: entries}} = assigns, socket) do
+    debug("feed stream is being poured into")
+
+    markers_enabled =
+      assigns[:enable_marker] != false and
+        Bonfire.Common.Settings.get([Bonfire.Social.Markers, :enabled], true,
+          context: assigns(socket)[:__context__]
+        )
+
+    socket
+    |> assign(Map.drop(assigns, [:insert_stream]))
+    |> assign(enable_marker: markers_enabled)
+    |> assign(
+      resumed_from_marker:
+        if(markers_enabled,
+          do: assign_or_existing(assigns, socket, :resumed_from_marker)
+        )
+    )
+    |> assign(jumping_to_newest: false)
+    |> LiveHandler.insert_feed(entries, reset: assigns[:reset_stream])
+    |> ok_socket()
+  end
+
+  defp assign_or_existing(assigns, socket, key) do
+    if Map.has_key?(assigns, key), do: assigns[key], else: assigns(socket)[key]
+  end
+
+  # adding new feed item
+  defp do_update(%{new_activity: new_activity} = _assigns, socket) when is_map(new_activity) do
+    if LiveHandler.live_activity_matches_filters?(
+         new_activity,
+         e(assigns(socket), :feed_filters, nil),
+         assigns(socket)
+       ) do
+      do_insert_new_activity(new_activity, socket)
+    else
+      debug("live activity doesn't match the current feed filters, skipping insert")
+      {:ok, socket}
+    end
+  end
+
+  defp do_insert_new_activity(new_activity, socket) do
+    debug("new_activity, add to top of feed")
+
+    activity_id =
+      id(new_activity) || e(new_activity, :activity, :id, nil) ||
+        e(new_activity, :object, :id, nil) || e(new_activity, :edge, :id, nil)
+
+    # Show own activities immediately without requiring a "Show fresh" click
+    subject_id =
+      e(new_activity, :subject, :id, nil) ||
+        e(new_activity, :activity, :subject, :id, nil)
+
+    is_own_activity? =
+      current_user_id(socket) != nil and current_user_id(socket) == subject_id
+
+    current_fresh_ids = e(assigns(socket), :fresh_ids, nil) || MapSet.new()
+
+    updated_fresh_ids =
+      if is_own_activity?,
+        do: current_fresh_ids,
+        else:
+          if(activity_id,
+            do: MapSet.put(current_fresh_ids, activity_id),
+            else: current_fresh_ids
+          )
+
+    socket =
+      if is_own_activity?,
+        do: socket,
+        else:
+          push_event(socket, "js-exec-attr-event", %{
+            to: "#show_fresh",
+            attr: "phx-show"
+          })
+
+    {
+      :ok,
+      socket
+      |> assign(fresh_ids: updated_fresh_ids)
+      |> LiveHandler.insert_feed(new_activity, at: 0, reset: false)
+    }
+  end
+
+  # def update(%{__context__: %{new_activity: new_activity}} = assigns, socket) when is_map(new_activity) do
+  #   debug("FeedLive: add new activity from component context")
+  #   update(Map.merge(assigns, %{new_activity: new_activity}), socket)
+  # end
+
+  defp do_update(_assigns, %{assigns: %{loading: loading?, feed: feed}} = socket)
+       when loading? == false and feed != :loading do
+    debug("skip replacing feed unless it was loading")
+    ok_socket(socket)
+  end
+
+  defp do_update(_assigns, %{assigns: %{feed: existing_feed}} = socket)
+       when is_list(existing_feed) and length(existing_feed) > 0 do
+    # FIXME: doesn't work because of temporary assigns?
+    debug("skip replacing already loaded feed")
+    ok_socket(socket)
+  end
+
+  defp do_update(%{feed: feed, page_info: page_info} = assigns, socket) when is_list(feed) do
+    debug("an initial feed was provided via assigns, auto-converting to stream")
+
+    socket =
+      socket
+      |> assign(Map.drop(assigns, [:feed]))
+      |> assign(page_info: page_info)
+      |> stream(:feed, feed, reset: true)
+
+    maybe_subscribe(socket)
+    |> ok_socket()
+  end
+
+  # def update(%{feed_id: "profile_timeline_"} = assigns, socket) do
+  #   debug("a user feed was NOT provided, fetching one now")
+
+  #   socket = assign(socket, assigns)
+  #   socket = assign(socket, :feed_component_id, assigns(socket).id)
+
+  #   socket =
+  #     socket
+  #     |> LiveHandler.feed_assigns_maybe_async(
+  #       assigns(socket)[:feed_name] || assigns(socket)[:feed_id] || assigns(socket)[:id] ||
+  #         :default,
+  #       ...
+  #     )
+  #     |> LiveHandler.insert_feed(socket, ...)
+
+  #   ok_socket(maybe_subscribe(socket))
+  # end
+
+  # While a load we started is still in flight (load ref set + loading), a content-less
+  # update for the SAME feed is just the parent re-rendering (e.g. after `reload/3`
+  # send_self's the sidebar widgets): its props carry the parent's STALE feed_filters, so
+  # assigning them would overwrite the in-flight filters, and falling through to the
+  # fetch clauses below would restart the load with those stale filters — whose (newer)
+  # result would then clobber the correctly-filtered one ("preset filters don't work").
+  defp do_update(%{feed: feed} = assigns, socket) when feed in [nil, :loading] do
+    incoming_feed_name = e(assigns, :feed_name, nil)
+
+    same_feed? =
+      is_nil(incoming_feed_name) or incoming_feed_name == assigns(socket)[:feed_name]
+
+    if same_feed? and assigns(socket)[:feed_load_ref] != nil and
+         assigns(socket)[:loading] == true do
+      debug("skipping content-less update for the same feed while a load is in flight")
+      ok_socket(socket)
+    else
+      do_update_awaiting_feed(assigns, socket)
+    end
+  end
+
+  defp do_update_awaiting_feed(
+         %{feed: nil, feed_count: feed_count} = _assigns,
+         %{assigns: %{feed_count: feed_count}} = socket
+       )
+       when not is_nil(feed_count) do
+    debug("a feed was NOT provided, but we have a feed_count")
+
+    ok_socket(socket)
+  end
+
+  defp do_update_awaiting_feed(%{feed: nil, feed_count: feed_count} = _assigns, socket)
+       when not is_nil(feed_count) do
+    debug("a feed was NOT provided, but feed_count was passed")
+
+    ok_socket(socket)
+  end
+
+  defp do_update_awaiting_feed(%{feed: nil, feed_filters: empty_feed_filters} = assigns, socket)
+       when empty_feed_filters == %{} or empty_feed_filters == [] or empty_feed_filters == nil do
+    socket = assign(socket, assigns)
+    socket = assign(socket, :feed_component_id, assigns(socket).id)
+
+    if user_socket_connected?(socket) || !current_user_id(socket) ||
+         LiveHandler.force_static?(socket) do
+      # if LiveHandler.maybe_load_async?(socket) do
+
+      debug("a feed was NOT provided, fetching one now (without filters)")
+
+      socket =
+        socket
+        |> assign(:feed_count, 0)
+        |> LiveHandler.feed_assigns_maybe_async(
+          assigns(socket)[:feed_name] || assigns(socket)[:feed_id] || assigns(socket)[:id] ||
+            :default,
+          ...
+        )
+        |> LiveHandler.insert_feed(socket, ...)
+
+      maybe_subscribe(socket)
+      |> ok_socket()
+    else
+      debug(
+        "a feed was NOT provided, but we don't have a user socket connected, so we just pass assigns and wait for the socket to connect"
+      )
+
+      ok_socket(socket)
+    end
+  end
+
+  defp do_update_awaiting_feed(%{feed: nil} = assigns, socket) do
+    socket = assign(socket, assigns)
+    socket = assign(socket, :feed_component_id, assigns(socket).id)
+
+    if user_socket_connected?(socket) || !current_user_id(socket) ||
+         LiveHandler.force_static?(socket) do
+      # if LiveHandler.maybe_load_async?(socket) do
+      debug("a feed was NOT provided, fetching one now (with filters)")
+
+      socket =
+        socket
+        |> assign(:feed_count, 0)
+        |> LiveHandler.feed_assigns_maybe_async(
+          {assigns(socket)[:feed_name] || assigns(socket)[:feed_id],
+           assigns(socket)[:feed_filters]},
+          ...
+        )
+        |> LiveHandler.insert_feed(socket, ...)
+
+      maybe_subscribe(socket)
+      |> ok_socket()
+    else
+      debug(
+        "a feed was NOT provided, but we don't have a user socket connected, so we just pass assigns and wait for the socket to connect"
+      )
+
+      ok_socket(socket)
+    end
+  end
+
+  defp do_update_awaiting_feed(%{feed: :loading} = assigns, socket) do
+    debug("a feed is being loaded async")
+
+    ok_socket(assign(socket, assigns))
+  end
+
+  defp do_update(%{loading: true} = assigns, socket) do
+    debug("a feed is being loaded async")
+
+    ok_socket(assign(socket, assigns))
+  end
+
+  defp do_update(_assigns, socket) do
+    warn("No feed loaded")
+    ok_socket(socket)
+  end
+
+  defp ok_socket(socket) do
+    # debug(assigns(socket)[:__context__][:current_params], "fsa")
+
+    {:ok,
+     socket
+     |> assign(
+       feed_component_id: assigns(socket)[:id],
+       hide_actions:
+         assigns(socket)[:hide_actions] ||
+           (Settings.get(
+              [
+                Bonfire.UI.Social.Activity.ActionsLive,
+                :feed,
+                :hide_until_hovered
+              ],
+              nil,
+              current_user: current_user(socket),
+              name: l("Hide Activity Actions"),
+              description:
+                l("Hide actions (such a like or boost) in feeds until users hover over them.")
+            ) && "until_hovered"),
+       hide_activities:
+         assigns(socket)[:hide_activities] ||
+           assigns(socket)[:__context__][:current_params]["hide_activities"]
+     )}
+  end
+
+  def maybe_subscribe(socket) do
+    case e(assigns(socket), :feed_ids, nil) |> Enums.filter_empty(nil) ||
+           e(assigns(socket), :feed_filters, :feed_ids, nil) |> Enums.filter_empty(nil) ||
+           e(assigns(socket), :feed_id, nil) do
+      nil ->
+        debug("no feed_id known, not subscribing to live updates")
+        socket
+
+      :user_activities ->
+        do_maybe_subscribe(
+          socket,
+          Bonfire.Social.Feeds.feed_id(:outbox, e(assigns(socket), :subject_user, nil))
+        )
+
+      feed when is_atom(feed) ->
+        debug(feed, "lookup feed")
+
+        do_maybe_subscribe(
+          socket,
+          Bonfire.Social.Feeds.user_named_or_feed_id(
+            feed,
+            debug(e(assigns(socket), :subject_user, nil) || current_user(socket), "agent")
+          )
+        )
+
+      feed_or_feeds ->
+        do_maybe_subscribe(socket, feed_or_feeds)
+    end
+  end
+
+  defp do_maybe_subscribe(socket, feed_id) when is_binary(feed_id) or is_list(feed_id) do
+    already_pubsub_subscribed = e(assigns(socket), :feed_pubsub_subscribed, nil)
+
+    if already_pubsub_subscribed == feed_id do
+      socket
+    else
+      PubSub.subscribe(feed_id, socket)
+
+      socket
+      |> assign(feed_pubsub_subscribed: feed_id)
+    end
+  end
+
+  defp do_maybe_subscribe(socket, feed_id) do
+    debug(feed_id, "feed_id(s) not recognised, NOT subscribing")
+    socket
+  end
+
+  # def handle_info({:new_activity, data}, socket) do
+  #   debug(feed_live_pubsub_received: data)
+
+  #   # maybe_send_update(Bonfire.UI.Social.FeedLive, "feed", new_activity: data)
+
+  #   {:noreply, socket}
+  # end
+
+  # def handle_event("select_tab", attrs, socket) do
+  #   tab = maybe_to_atom(e(attrs, "name", nil))
+
+  #   debug(attrs, tab)
+
+  #   {:noreply,
+  #    socket
+  #    |> assign(selected_tab: tab)
+  #    |> LiveHandler.insert_feed(LiveHandler.feed_assigns_maybe_async(tab, socket))}
+  # end
+
+  def maybe_widgets(assigns) do
+    maybe_widgets(assigns, feed_name(assigns))
+  end
+
+  def maybe_widgets(assigns, feed_name) do
+    cond do
+      feed_name in [:curated] ->
+        curated_widgets()
+
+      # feed_name in [:notifications] ->
+      #   [
+      #     # page_header_aside: [
+      #     #   {Bonfire.UI.Social.HeaderAsideNotificationsSeenLive,
+      #     #    [
+      #     #      feed_id: e(assigns[:current_user], :character, :notifications_id, nil),
+      #     #      feed_name: "notifications"
+      #     #    ]}
+      #     #   # {Bonfire.UI.Social.HeaderAsideFeedFiltersLive, [feed_name: "notifications"]}
+      #     # ]
+      #   ]
+
+      match?({:ok, _}, Bonfire.Social.Feeds.feed_preset_if_permitted(feed_name, assigns)) ->
+        widgets(assigns)
+
+      true ->
+        [
+          # page_header_aside: [
+          #   {Bonfire.UI.Social.HeaderAsideFeedFiltersLive, [feed_name: feed_name]}
+          # ]
+        ]
+    end
+  end
+
+  defp curated_widgets() do
+    [
+      sidebar_widgets: [
+        # guests: [
+        #   secondary: [
+        #     {Bonfire.UI.Social.WidgetFeedDescriptionLive, [feed_name: :curated]},
+        #     {Bonfire.Tag.Web.WidgetTagsLive, []}
+        #   ]
+        # ],
+        users: [
+          secondary: [
+            # {Bonfire.UI.Social.WidgetFeedDescriptionLive, [feed_name: :curated]},
+            # {Bonfire.UI.Social.WidgetFeedsLive, []},
+            {Bonfire.Tag.Web.WidgetTagsLive, []}
+          ]
+        ]
+      ]
+    ]
+  end
+
+  def widgets(assigns) do
+    feed_name = e(assigns, :feed_name, nil)
+
+    customize_feed_widget =
+      if e(assigns, :hide_filters, nil) != true,
+        do: [
+          {Bonfire.UI.Social.WidgetCustomizeFeedLive,
+           [
+             event_target: "##{e(assigns, :feed_component_id, nil)}",
+             feed_id: e(assigns, :feed_id, nil),
+             feed_name: feed_name,
+             feed_filters: e(assigns, :feed_filters, nil),
+             showing_within: e(assigns, :showing_within, nil)
+           ]}
+        ],
+        else: []
+
+    [
+      # page_header_aside: [
+      #   {Bonfire.UI.Social.HeaderAsideFeedFiltersLive, [feed_name: feed_name]}
+      # ],
+      sidebar_widgets: [
+        guests: [
+          secondary: [
+            {Bonfire.UI.Social.WidgetFeedDescriptionLive, [feed_name: feed_name]}
+          ]
+        ],
+        users: [
+          secondary:
+            customize_feed_widget ++
+              [
+                # {Bonfire.UI.Social.WidgetGettingStartedLive, [type: Surface.LiveComponent]},
+                # {Bonfire.UI.Social.WidgetFeedDescriptionLive, [feed_name: feed_name]},
+                # {Bonfire.UI.Social.WidgetFeedsLive, []},
+                {Bonfire.Tag.Web.WidgetTagsLive, []}
+                # {Bonfire.UI.Social.WidgetTrendingLinksLive, []}
+              ]
+        ]
+      ]
+    ]
+  end
+
+  def feed_name(assigns),
+    do:
+      assigns[:feed_name] || assigns[:feed_id] || assigns[:id] ||
+        :default
+
+  def handle_event(
+        "set_filter",
+        %{"Elixir.Bonfire.UI.Social.FeedLive" => attrs},
+        socket
+      ) do
+    handle_event(
+      "set_filter",
+      attrs,
+      socket
+    )
+  end
+
+  def handle_event(
+        "set_filter",
+        %{"Bonfire.UI.Social.FeedLive" => attrs},
+        socket
+      ) do
+    handle_event(
+      "set_filter",
+      attrs,
+      socket
+    )
+  end
+
+  def handle_event(
+        "set_filter",
+        %{"time_limit" => time_limit} = attrs,
+        socket
+      ) do
+    # Use set_filters for consistency with other filter handling
+    set_filters(
+      %{time_limit: time_limit}
+      |> Map.merge(
+        # Handle multiply_limit if present
+        case e(attrs, "multiply_limit", nil) |> Types.maybe_to_integer(nil) do
+          nil -> %{}
+          multiply_limit -> %{deferred_join_multiply_limit: multiply_limit}
+        end
+      ),
+      socket
+    )
+  end
+
+  def handle_event(
+        "set_filter",
+        %{"time_limit_idx" => time_limit_idx},
+        socket
+      ) do
+    # special handling for range input control
+    selected_value =
+      Bonfire.UI.Social.TimeControlLive.find_value_by_index(time_limit_idx)
+      |> debug("selected value at index #{time_limit_idx}")
+
+    set_filters(%{time_limit: selected_value}, socket)
+  end
+
+  def handle_event(
+        "set_filter",
+        %{"toggle" => field, "toggle_type" => type} = params,
+        socket
+      ) do
+    # Check if we're NOT using the lite controls AND this is a tab mode click
+    if params["tab_mode"] == "true" do
+      # Tab behavior for tab filter buttons
+      if params["toggle_value"] == "true" do
+        # Set this tab as the only active filter
+        set_filters(
+          %{
+            # Clear all possible filter types, then set only the clicked one
+            object_types: if(field == "object_types", do: [maybe_to_atom(type)], else: []),
+            media_types: if(field == "media_types", do: [maybe_to_atom(type)], else: []),
+            activity_types: if(field == "activity_types", do: [maybe_to_atom(type)], else: []),
+            # Also clear all exclude lists
+            exclude_object_types: [],
+            exclude_media_types: [],
+            exclude_activity_types: []
+          },
+          socket,
+          true
+        )
+      else
+        # toggle_value is nil or "false" - clicking active tab, so show all
+        set_filters(
+          %{
+            # Clear all filters to show everything
+            object_types: [],
+            media_types: [],
+            activity_types: [],
+            exclude_object_types: [],
+            exclude_media_types: [],
+            exclude_activity_types: []
+          },
+          socket,
+          true
+        )
+      end
+    else
+      # Regular behavior for standard controls
+      set_type(
+        maybe_to_atom(field),
+        maybe_to_atom("exclude_#{field}"),
+        type,
+        params["toggle_value"],
+        socket
+      )
+    end
+  end
+
+  def handle_event(
+        "mobile_filter_change",
+        %{} = params,
+        socket
+      ) do
+    value = params["filter_select"] || ""
+
+    case value do
+      "" ->
+        # Empty value selected, delegate to set_filter to show all
+        handle_event(
+          "set_filter",
+          %{
+            "toggle" => "object_types",
+            "toggle_type" => "post",
+            "toggle_value" => nil,
+            "tab_mode" => "true"
+          },
+          socket
+        )
+
+      _ ->
+        case String.split(value, ":") do
+          [field, type] when field != "" and type != "" ->
+            # Delegate to existing set_filter handler with tab_mode
+            handle_event(
+              "set_filter",
+              %{
+                "toggle" => field,
+                "toggle_type" => type,
+                "toggle_value" => "true",
+                "tab_mode" => "true"
+              },
+              socket
+            )
+
+          _ ->
+            # Invalid format, ignore
+            {:noreply, socket}
+        end
+    end
+  end
+
+  def handle_event(
+        "set_filter",
+        %{"include" => types},
+        socket
+      ) do
+    # warn(types, "WIP: set_types_filter")
+
+    {_include_map, exclude_map} = Map.split_with(types, fn {_, v} -> v == "true" end)
+
+    set_filters(
+      %{
+        # activity_types: Map.keys(include_map) # TODO?
+        exclude_activity_types: Map.keys(exclude_map)
+      },
+      socket
+    )
+  end
+
+  def handle_event(
+        "set_filter",
+        %{"subject_circles" => circle_id} = _params,
+        socket
+      )
+      when not is_nil(circle_id) do
+    current_circles = e(assigns(socket), :feed_filters, :subject_circles, [])
+
+    updated_circles =
+      if circle_id in current_circles do
+        List.delete(current_circles, circle_id)
+      else
+        [circle_id | current_circles]
+      end
+      |> Enum.uniq()
+
+    set_filters(
+      %{
+        subject_circles: updated_circles
+      },
+      socket
+    )
+  end
+
+  def handle_event(
+        "set_filter",
+        attrs,
+        socket
+      ) do
+    set_filters(
+      attrs,
+      socket
+    )
+  end
+
+  def handle_event(
+        "apply_filters",
+        %{"filters" => filters_json},
+        socket
+      ) do
+    with {:ok, filters} <- Jason.decode(filters_json) do
+      # Close the modal
+      Bonfire.UI.Common.OpenModalLive.close()
+
+      set_filters(filters, socket, true)
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  # Level 1 of the customize-feed widget: a preset card was picked
+  def handle_event("set_filter_preset", params, socket) do
+    case Bonfire.UI.Social.WidgetCustomizeFeedLive.preset_filters(params["feed_preset"]) do
+      nil -> {:noreply, socket}
+      filters -> set_filters(filters, socket, true)
+    end
+  end
+
+  # Level 2 of the customize-feed widget: the most common adjustments. NB the form posts
+  # ALL of its toggles on each change, so each toggle is applied only when its posted
+  # value differs from the current effective state — otherwise flipping one toggle would
+  # re-apply the others as commands (e.g. clobbering a preset's reply exclusion or a
+  # custom time_limit set in the modal).
+  def handle_event("set_filter_overrides", %{"scope" => scope}, socket) do
+    filters = assigns(socket)[:feed_filters] || %{}
+
+    replies_hidden? = Bonfire.UI.Social.FeedExtraControlsLive.replies_excluded?(filters)
+
+    attrs =
+      case scope["replies"] do
+        "true" when not replies_hidden? ->
+          toggle_exclude_activity_type(%{}, filters, :reply, true)
+
+        "false" when replies_hidden? ->
+          toggle_exclude_activity_type(%{}, filters, :reply, false)
+
+        _ ->
+          %{}
+      end
+
+    boosts_hidden? = Bonfire.UI.Social.FeedExtraControlsLive.boosts_excluded?(filters)
+
+    attrs =
+      case scope["boosts"] do
+        "true" when not boosts_hidden? ->
+          toggle_exclude_activity_type(attrs, filters, :boost, true)
+
+        "false" when boosts_hidden? ->
+          toggle_exclude_activity_type(attrs, filters, :boost, false)
+
+        _ ->
+          attrs
+      end
+
+    groups_included? =
+      Bonfire.UI.Social.WidgetCustomizeFeedLive.group_activities_included?(filters)
+
+    attrs =
+      case scope["group_activity"] do
+        "true" when not groups_included? ->
+          Map.put(
+            attrs,
+            :exclude_subject_types,
+            Bonfire.UI.Social.WidgetCustomizeFeedLive.exclude_subject_types_toggling_groups(
+              filters,
+              true
+            )
+          )
+
+        "false" when groups_included? ->
+          Map.put(
+            attrs,
+            :exclude_subject_types,
+            Bonfire.UI.Social.WidgetCustomizeFeedLive.exclude_subject_types_toggling_groups(
+              filters,
+              false
+            )
+          )
+
+        _ ->
+          attrs
+      end
+
+    # source switch: swap between the Following feed and everything known to the instance,
+    # in place, carrying over only the filters that deviate from the source feed's preset
+    {socket, attrs} =
+      case {scope["following"], e(assigns(socket), :feed_name, nil)} do
+        {"true", current} when current not in [:my, nil] ->
+          switch_feed_source(socket, attrs, current, :my)
+
+        {"false", current} when current not in [:explore, nil] ->
+          switch_feed_source(socket, attrs, current, :explore)
+
+        _ ->
+          {socket, attrs}
+      end
+
+    if attrs == %{} do
+      {:noreply, socket}
+    else
+      set_filters(attrs, socket, true)
+    end
+  end
+
+  defp switch_feed_source(socket, attrs, source_feed_name, target_feed_name) do
+    # Drop preset-owned filter dimensions whose value merely mirrors the SOURCE feed's
+    # canonical preset (they were inherited, not chosen), so the TARGET feed's own preset
+    # filters apply after the switch; explicit deviations (preset cards, hide toggles,
+    # modal edits) travel along, as do scope filters like time_limit/exclude_subjects.
+    filters = Enums.maybe_to_map(e(assigns(socket), :feed_filters, nil) || %{})
+    source_preset = LiveHandler.preset_canonical_filters(source_feed_name, assigns(socket))
+
+    pruned =
+      Enum.reduce(
+        Bonfire.UI.Social.WidgetCustomizeFeedLive.preset_owned_keys(),
+        filters,
+        fn key, acc ->
+          if LiveHandler.filter_value_matches?(e(filters, key, nil), e(source_preset, key, nil)),
+            do: Map.delete(acc, key),
+            else: acc
+        end
+      )
+
+    # keep the parent view's feed_name in sync: its re-renders pass feed_name back down as
+    # a prop, and a stale one would read as a navigation to another feed (bypassing the
+    # in-flight guard in do_update and reverting the switch)
+    send_self(feed_name: target_feed_name)
+
+    {
+      socket |> assign(feed_name: target_feed_name, feed_filters: pruned),
+      Map.put(attrs, :feed_name, target_feed_name)
+    }
+  end
+
+  # Level 3 of the customize-feed widget: advanced knobs (also posts all knobs on each change)
+  def handle_event("set_filter_knobs", %{"filters" => filters}, socket) do
+    set_filters(Map.take(filters, ["time_limit", "sort_order", "origin"]), socket)
+  end
+
+  def handle_event(
+        "set",
+        attrs,
+        socket
+      ) do
+    reload(
+      assigns(socket)[:feed_filters],
+      socket
+      |> Bonfire.UI.Common.LiveHandlers.assign_attrs(attrs)
+    )
+  end
+
+  # def handle_event(
+  #       "live_select_change",
+  #       %{"text" => text, "id" => live_select_id, "field" => field},
+  #       socket
+  #     ) do
+  #   options =
+  #     case field do
+  #       "subject_circles" ->
+  #         Bonfire.UI.Boundaries.SetBoundariesLive.circles_for_multiselect(
+  #           assigns(socket)[:__context__],
+  #           :subject_circles,
+  #           text
+  #         )
+
+  #       _ ->
+  #         []
+  #     end
+
+  #   send_update(LiveSelect.Component, id: live_select_id, options: options)
+  #   {:noreply, socket}
+  # end
+
+  def handle_event("toggle_circle_filter", %{"circle_id" => circle_id}, socket) do
+    current_circles = e(socket.assigns, :feed_filters, :subject_circles, [])
+
+    updated_circles =
+      if circle_id in current_circles do
+        List.delete(current_circles, circle_id)
+      else
+        [circle_id | current_circles] |> Enum.uniq()
+      end
+
+    set_filters(
+      %{
+        "Elixir.Bonfire.UI.Social.FeedLive" => %{
+          subject_circles: updated_circles
+        }
+      },
+      socket
+    )
+  end
+
+  def handle_event("multi_select", %{data: selected}, socket) when is_list(selected) do
+    filters =
+      Enum.group_by(selected, fn %{} = data -> data["field"] end)
+      |> debug()
+      |> Enum.reduce(%{}, fn {field, data}, acc ->
+        Map.merge(acc, %{
+          field =>
+            data
+            |> Enum.map(&id/1)
+            |> Enum.uniq()
+        })
+      end)
+      |> debug()
+
+    set_filters(
+      filters,
+      socket
+    )
+  end
+
+  def set_filters(
+        attrs,
+        socket,
+        _replace_lists \\ false
+      ) do
+    # debug(attrs, "set_filter")
+
+    # Handle special case: origin: :all should clear the origin filter
+    {attrs, should_clear_origin} =
+      case attrs do
+        %{"origin" => "all"} -> {Map.delete(attrs, "origin"), true}
+        %{origin: :all} -> {Map.delete(attrs, :origin), true}
+        _ -> {attrs, false}
+      end
+
+    # Similarly, sort_by: false means "reset to default ordering" — a nil wouldn't
+    # survive the merge below (merge_as_map drops empty fields), so we remove the key
+    # from the existing filters instead (used by the customize-feed preset cards)
+    {attrs, should_clear_sort} =
+      case attrs do
+        %{"sort_by" => "false"} -> {Map.delete(attrs, "sort_by"), true}
+        %{sort_by: false} -> {Map.delete(attrs, :sort_by), true}
+        _ -> {attrs, false}
+      end
+
+    case FeedFilters.validate(attrs) do
+      {:ok, filters} ->
+        existing_filters = assigns(socket)[:feed_filters] || %{}
+
+        # If we need to clear origin, remove it from existing filters
+        existing_filters =
+          if should_clear_origin do
+            Map.delete(existing_filters, :origin)
+          else
+            existing_filters
+          end
+
+        existing_filters =
+          if should_clear_sort do
+            Map.delete(existing_filters, :sort_by)
+          else
+            existing_filters
+          end
+
+        reload(
+          # Enums.merge_to_struct(
+          #   FeedFilters,
+          Enums.merge_as_map(
+            debug(existing_filters, "existing filters"),
+            filters
+            |> debug("validated")
+            # replace_lists: replace_lists
+          )
+          |> debug("merged"),
+          socket,
+          Config.env() == :test
+        )
+
+      e ->
+        error(e)
+    end
+  end
+
+  def reload(
+        feed_filters \\ nil,
+        socket,
+        reset \\ true
+      ) do
+    # need to reload feed so streams are updated
+
+    assigns = assigns(socket)
+
+    feed_filters = feed_filters || e(assigns, :feed_filters, %{})
+
+    feed_name = feed_name(assigns)
+
+    # re-send widgets with the UPDATED filters so sidebar widgets (e.g. customize-feed) reflect them
+    # (NB: don't send_self(feed_filters: ...) — the parent re-passes stale feed/loading props down)
+    assigns = Map.put(assigns, :feed_filters, feed_filters)
+
+    if is_nil(feed_name) or feed_name in [:my, :explore, :remote, :local, :custom] or
+         match?({:ok, _}, Bonfire.Social.Feeds.feed_preset_if_permitted(feed_name, assigns)),
+       do: send_self(widgets(assigns))
+
+    socket =
+      socket
+      |> assign(
+        loading: reset,
+        reloading: !reset,
+        page_info: nil,
+        previous_page_info: nil,
+        feed_filters: feed_filters
+      )
+
+    # |> assign(:page_header_aside, LiveHandler.page_header_asides(...))
+
+    feed_assigns =
+      LiveHandler.feed_assigns_maybe_async(
+        {feed_name, feed_filters},
+        socket,
+        true,
+        true
+      )
+      |> debug("reload with feed_assigns")
+
+    {
+      :noreply,
+      socket
+      |> LiveHandler.insert_feed(feed_assigns, reset: reset)
+      # |> debug("socket_assigned")
+      # |> debug("seeet")
+    }
+  end
+
+  defp reject_types(list, types) do
+    types = Enum.map(List.wrap(types), &to_string/1)
+    Enum.reject(list, &(to_string(&1) in types))
+  end
+
+  # Adds/removes one activity type in exclude_activity_types (and drops it from the
+  # include list when hiding), composing with values another toggle already put in attrs
+  # in the same event. Rejects before appending so a pre-existing string "reply"/"boost"
+  # doesn't duplicate the atom.
+  defp toggle_exclude_activity_type(attrs, filters, type, hide?) do
+    exclude =
+      Map.get(attrs, :exclude_activity_types) ||
+        List.wrap(e(filters, :exclude_activity_types, []) || [])
+
+    if hide? do
+      include =
+        Map.get(attrs, :activity_types) || List.wrap(e(filters, :activity_types, []) || [])
+
+      attrs
+      |> Map.put(:exclude_activity_types, reject_types(exclude, [type]) ++ [type])
+      |> Map.put(:activity_types, reject_types(include, [type]))
+    else
+      Map.put(attrs, :exclude_activity_types, reject_types(exclude, [type]))
+    end
+  end
+
+  defp set_type(include_field, exclude_field, type, value, socket) do
+    do_set_type(
+      List.wrap(ed(assigns(socket), :feed_filters, include_field, [])),
+      List.wrap(ed(assigns(socket), :feed_filters, exclude_field, [])),
+      include_field,
+      exclude_field,
+      Types.maybe_to_atom(type),
+      value,
+      socket
+    )
+  end
+
+  defp do_set_type(
+         already_selected,
+         already_excluded,
+         include_field,
+         exclude_field,
+         type,
+         "true",
+         socket
+       ) do
+    set_filters(
+      %{
+        include_field => already_selected ++ [type],
+        exclude_field => already_excluded |> Enum.reject(&(&1 == type))
+      }
+      |> debug(),
+      socket,
+      true
+    )
+  end
+
+  defp do_set_type(
+         already_selected,
+         already_excluded,
+         include_field,
+         exclude_field,
+         type,
+         "false",
+         socket
+       ) do
+    set_filters(
+      %{
+        include_field => already_selected |> Enum.reject(&(&1 == type)),
+        exclude_field => already_excluded ++ [type]
+      }
+      |> debug(),
+      socket,
+      true
+    )
+  end
+
+  defp do_set_type(
+         already_selected,
+         already_excluded,
+         include_field,
+         exclude_field,
+         type,
+         _value,
+         socket
+       ) do
+    set_filters(
+      %{
+        include_field => already_selected |> Enum.reject(&(&1 == type)),
+        exclude_field => already_excluded |> Enum.reject(&(&1 == type))
+      }
+      |> debug(),
+      socket,
+      true
+    )
+  end
+
+  def handle_event("show_fresh", _attrs, socket) do
+    {:noreply, assign(socket, fresh_ids: nil)}
+  end
+
+  def handle_event("Bonfire.Social.Feeds:reading_position_updated", attrs, socket) do
+    LiveHandler.handle_event("reading_position_updated", attrs, socket)
+  end
+
+  def handle_event("reading_position_updated", attrs, socket) do
+    LiveHandler.handle_event("reading_position_updated", attrs, socket)
+  end
+
+  def handle_event("jump_to_newest", %{"feed_name" => feed_name}, %{assigns: assigns} = socket) do
+    feed_id = e(assigns, :feed_name, nil) || e(assigns, :feed_id, nil)
+
+    Bonfire.Social.Markers.clear_reading_position(current_user(socket), feed_name)
+
+    socket =
+      socket
+      |> push_event("clear_reading_position", %{feed_name: feed_name})
+      |> assign(jumping_to_newest: true, resumed_from_marker: nil)
+
+    # keep any active custom filters when jumping back to the top (but pass a bare
+    # feed_id when there are none — {feed_id, %{}} would fall through to catch-all clauses)
+    feed =
+      case e(assigns, :feed_filters, nil) || %{} do
+        empty when empty == %{} -> feed_id
+        feed_filters -> {feed_id, feed_filters}
+      end
+
+    result =
+      LiveHandler.feed_assigns_maybe_async(
+        feed,
+        socket,
+        true,
+        true
+      )
+
+    case result do
+      new_assigns when is_list(new_assigns) ->
+        {:noreply, assign(socket, new_assigns)}
+
+      other ->
+        error(other, "jump_to_newest: unexpected result from feed_assigns_maybe_async")
+        {:noreply, socket}
+    end
+  end
+end

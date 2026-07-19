@@ -1,0 +1,13 @@
+<%= if Bonfire.Classify.ensure_update_allowed(current_user(@__context__), @category) ||
+    Bonfire.Boundaries.can?(@__context__, :mediate, @category) do %>
+  <StatefulComponent
+    module={maybe_component(Bonfire.UI.Moderation.FlagsLive, @__context__)}
+    selected_tab={@selected_tab}
+    id="group_flags"
+    scope={@category}
+  />
+<% else %>
+  <div class="p-4 m-4 mt-2 bg-warning/10 rounded flex flex-col items-center place-content-center h-80">
+    <div class="text-warning/70">{l("Sorry, you cannot moderate this group.")}</div>
+  </div>
+<% end %>

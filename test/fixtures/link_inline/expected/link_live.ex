@@ -1,0 +1,343 @@
+defmodule Bonfire.UI.Common.LinkLive do
+  @moduledoc """
+  Defines a link that will **link** to a `Page` or external URL, or **redirect** to a new LiveView.
+  If you want to navigate to the same LiveView without remounting it, use `<LinkPatchLive>` instead.
+  """
+
+  use Bonfire.UI.Common.Web, :function_component
+  # import Phoenix.Component
+
+  @doc "The required path or URL to link to"
+  prop to, :string, required: true
+
+  @doc "The flag to replace the current history or push a new state (if linking to a LiveView)"
+  prop replace, :boolean, default: false
+
+  @doc "The CSS class for the generated `<a>` element"
+  prop class, :css_class, default: ""
+
+  @doc """
+  The label for the generated `<a>` element, used for aria-label, and as the link text if no other content is provided (as a default slot).
+  """
+  prop label, :string
+
+  @doc "What JS hook to attach to the link, if any (possibly overriding the default action of the link)"
+  prop phx_hook, :string, default: nil
+  prop id, :string, default: nil
+
+  prop parent_id, :string, default: nil
+
+  @doc "What LiveHandler and/or event name to send the patch event to, if any (possibly overriding the default action of the link)"
+  prop event_handler, :string, default: nil
+
+  @doc "What element (and it's parent view or stateful component) to send the event to"
+  prop event_target, :string, default: nil
+
+  @doc "What browser window/frame to target, eg. `_blank`. Defaults to the `link_target` found in context (set page-wide by embed views), or `_top`."
+  prop target, :string, default: nil
+
+  prop external_link_warnings, :boolean, default: false
+
+  @doc """
+  Additional attributes to add onto the generated element
+  """
+  prop opts, :keyword, default: []
+
+  @doc """
+  The content of the generated `<a>` element. If no content is provided,
+  the value of property `label` is used instead.
+  """
+  slot default
+
+  defp link_opts(opts, label, target) do
+    opts
+    |> Keyword.merge("aria-label": label)
+    |> maybe_put_noopener(target)
+  end
+
+  defp maybe_put_noopener(opts, "_blank"), do: Keyword.put_new(opts, :rel, "noopener")
+  defp maybe_put_noopener(opts, _), do: opts
+
+  def render(assigns) do
+    assigns
+    |> assign(
+      :target,
+      assigns[:target] || e(assigns[:__context__], :link_target, nil) || "_top"
+    )
+    |> render_link()
+  end
+
+  defp render_link(%{event_handler: event_handler, phx_hook: phx_hook} = assigns)
+       when is_binary(event_handler) or is_binary(phx_hook) do
+    # TODO: How can I have a phx-click on an anchor without the browser also triggering the default navigation?
+    # <a href={@to}
+    if socket_connected?(assigns) do
+      ~H"""
+      <span
+        data-to={@to}
+        phx-value-to={@to}
+        phx-click={@event_handler}
+        phx-hook={@phx_hook}
+        id={if @phx_hook,
+          do:
+            @id ||
+              deterministic_dom_id(
+                "LinkLive_event",
+                @to,
+                @label,
+                @parent_id || @__context__[:tree_hash]
+              )}
+        phx-target={@event_target}
+        class={@class}
+        {link_opts(@opts, @label, nil)}
+      >
+        <%!-- FIXME: do not generate random ID to avoid re-rendering --%>
+        <%= if @inner_block && @inner_block != [] do %>{render_slot(@inner_block)}<% else %>{@label}<% end %>
+      </span>
+      """
+    else
+      # fallback to only using a link when LiveView is not available
+      render_link(Map.drop(assigns, [:event_handler]))
+    end
+  end
+
+  defp render_link(%{to: "http" <> _, external_link_warnings: true} = assigns) do
+    ~H"""
+    <p class="mb-4">{l(
+        "This is an external link, please check where it leads before following it. If you have concerns it may be malicious you can check one of the URL or IP address reputation services below, or copy and paste the URL into the reputation tool of your choice."
+      )}</p>
+
+    <a
+      phx-hook="Copy"
+      id={@id ||
+        deterministic_dom_id(
+          "LinkLive_copy",
+          @to,
+          @label,
+          @parent_id || @__context__[:tree_hash]
+        )}
+      href={@to}
+      target={@target}
+      class="float-right ml-4 flex items-center gap-2 btn btn-sm"
+    >
+      <#Icon iconify="ri:file-copy-line" class="w-4 h-4 shrink-0" />
+      <span data-role="label">{l("Copy")}</span>
+    </a>
+
+    <Link
+      to={@to}
+      class={@class}
+      opts={link_opts(@opts, @label, @target) |> Keyword.merge(target: @target)}
+    >
+      <%= if @inner_block && @inner_block != [] do %>{render_slot(@inner_block)}<% else %>{@label}<% end %>
+    </Link>
+
+    <%!-- TODO: make these configurable --%>
+    <%= case Unfurl.uri_host(@to) do %>
+      <% domain -> %>
+        <p class="mt-4 text-xs">
+          <%= case URI.encode_www_form(domain) do %>
+            <% url_encoded -> %>
+              Check URL:
+              <Link
+                to={"https://transparencyreport.google.com/safe-browsing/search?url=#{url_encoded}"}
+                opts={@opts |> Keyword.merge(target: "_blank")}
+                class="btn btn-sm"
+              >{l("Google Safe Browsing")}</Link>
+
+              <Link
+                to={"https://urlscan.io/search/#page.url.keyword:#{url_encoded}*"}
+                opts={@opts |> Keyword.merge(target: "_blank")}
+                class="btn btn-sm"
+              >{l("URLscan")}</Link>
+
+              <%!--
+                    <Link
+            to={"https://www.urlvoid.com/scan/#{url_encoded}"}
+            opts={@opts |> Keyword.merge(target: "_blank")}
+            class="btn btn-sm"
+          >{l("URLvoid")}</Link>
+
+          --%>
+
+              <Link
+                to={"https://otx.alienvault.com/indicator/domain/#{url_encoded}"}
+                opts={@opts |> Keyword.merge(target: "_blank")}
+                class="btn btn-sm"
+              >{l("AlienVault OTX")}</Link>
+
+              <Link
+                to={"https://www.virustotal.com/gui/search/#{url_encoded}"}
+                opts={@opts |> Keyword.merge(target: "_blank")}
+                class="btn btn-sm"
+              >{l("VirusTotal")}</Link>
+
+              <Link
+                to={"https://sitecheck.sucuri.net/results/#{url_encoded}"}
+                opts={@opts |> Keyword.merge(target: "_blank")}
+                class="btn btn-sm"
+              >{l("Sucuri")}</Link>
+
+              <Link
+                to={"https://safeweb.norton.com/report?url=#{url_encoded}"}
+                opts={@opts |> Keyword.merge(target: "_blank")}
+                class="btn btn-sm"
+              >{l("Norton")}</Link>
+
+              <Link
+                to={"https://check.spamhaus.org/results/?query=#{url_encoded}"}
+                opts={@opts |> Keyword.merge(target: "_blank")}
+                class="btn btn-sm"
+              >{l("SpamHaus")}</Link>
+
+              <Link
+                to={"https://mxtoolbox.com/SuperTool.aspx?action=blacklist:#{url_encoded}"}
+                opts={@opts |> Keyword.merge(target: "_blank")}
+                class="btn btn-sm"
+              >{l("MX Toolbox")}</Link>
+          <% end %>
+        </p>
+
+        <p class="mt-4 text-xs">
+          <%= case Cache.maybe_apply_cached({Unfurl, :domain_ip_address}, domain, fallback_return: nil)
+            ~> debug("IPadr") do %>
+            <% ip when is_binary(ip) -> %>
+              Check IP:
+              <Link
+                to={"https://www.abuseipdb.com/check/#{ip}"}
+                opts={@opts |> Keyword.merge(target: "_blank")}
+                class="btn btn-sm"
+              >{l("AbuseIPDB")}</Link>
+
+              <Link
+                to={"https://otx.alienvault.com/indicator/ip/#{ip}"}
+                opts={@opts |> Keyword.merge(target: "_blank")}
+                class="btn btn-sm"
+              >{l("AlienVault OTX")}</Link>
+
+              <Link
+                to={"https://www.projecthoneypot.org/ip_#{ip}"}
+                opts={@opts |> Keyword.merge(target: "_blank")}
+                class="btn btn-sm"
+              >{l("Project Honeypot")}</Link>
+            <% _ -> %>
+          <% end %>
+        </p>
+    <% end %>
+    """
+  end
+
+  defp render_link(%{to: "http" <> _} = assigns) do
+    case local_path(assigns.to) do
+      nil ->
+        ~H"""
+        <Link
+          to={@to}
+          class={@class}
+          opts={link_opts(@opts, @label, @target) |> Keyword.merge(target: @target)}
+        >
+          <%= if @inner_block && @inner_block != [] do %>{render_slot(@inner_block)}<% else %>{@label}<% end %>
+        </Link>
+        """
+
+      path ->
+        assign(assigns, :to, path)
+        |> do_render_link()
+    end
+  end
+
+  # Local path when the URL is on this instance, else nil. The base prefix must
+  # end at a path/query/fragment boundary so `https://myhost.evil.com` isn't
+  # treated as local when base is `https://myhost`.
+  defp local_path(url) do
+    base = Bonfire.Common.URIs.base_url()
+
+    if base != "" do
+      case String.replace_prefix(url, base, "") do
+        ^url -> nil
+        "" -> "/"
+        "/" <> _ = path -> path
+        "?" <> _ = rest -> "/" <> rest
+        "#" <> _ = rest -> "/" <> rest
+        _ -> nil
+      end
+    end
+  end
+
+  # Fragment links scroll the current document — never give them a `target`
+  # (in an embed it would open a new tab / navigate _top instead of scrolling).
+  defp render_link(%{to: "#" <> _} = assigns) do
+    ~H"""
+    <Link to={@to} class={@class} opts={link_opts(@opts, @label, nil)}>
+      <%= if @inner_block && @inner_block != [] do %>{render_slot(@inner_block)}<% else %>{@label}<% end %>
+    </Link>
+    """
+  end
+
+  defp render_link(%{__context__: %{current_app: :bonfire_pages}} = assigns) do
+    # TODO: this should only apply to links to Page views, not internal pages
+    ~H"""
+    <Link
+      to={@to}
+      class={@class}
+      opts={link_opts(@opts, @label, @target) |> Keyword.merge(target: @target)}
+    >
+      <%= if @inner_block && @inner_block != [] do %>{render_slot(@inner_block)}<% else %>{@label}<% end %>
+    </Link>
+    """
+  end
+
+  defp render_link(%{to: to} = assigns) when is_binary(to) and to != "" do
+    do_render_link(assigns)
+  end
+
+  defp render_link(assigns) do
+    ~H"""
+    <div data-name="no_link" class={@class} {@opts |> Keyword.merge("aria-label": @label)}>
+      <%= if @inner_block && @inner_block != [] do %>{render_slot(@inner_block)}<% else %>{@label}<% end %>
+    </div>
+    """
+  end
+
+  # In-app default (`_top`): use LiveView (SPA) `navigate` — fast client-side nav
+  # that stays in the current window. `target="_top"` is a browser no-op here.
+  def do_render_link(%{to: to, target: target} = assigns)
+      when is_binary(to) and to != "" and target in [nil, "_top"] do
+    ~H"""
+    <.link
+      navigate={@to}
+      class={@class}
+      replace={@replace}
+      target={@target}
+      phx-hook={if socket_connected?(@__context__) and e(@__context__, :hide_main, false),
+        do: "Bonfire.UI.Common.PreviewContentLive#CloseAll"}
+      id={if socket_connected?(@__context__) and e(@__context__, :hide_main, false),
+        do:
+          @id ||
+            deterministic_dom_id(
+              "LinkLive",
+              @to,
+              @label,
+              @parent_id || @__context__[:tree_hash]
+            )}
+      {link_opts(@opts, @label, @target)}
+    >
+      <%!-- FIXME: do not generate random ID to avoid re-rendering --%>
+      <%= if @inner_block && @inner_block != [] do %>{render_slot(@inner_block)}<% else %>{@label}<% end %>
+    </.link>
+    """
+  end
+
+  # Explicit target (e.g. `_blank` in an embed iframe): render a plain `href`
+  # link with NO `data-phx-link`, so the browser opens the target itself. Using
+  # LiveView `navigate` here would double-navigate — the browser opens the new
+  # tab/window AND LiveView's click handler (which ignores `target` on nested
+  # click targets) also runs an in-frame live redirect.
+  def do_render_link(%{to: to} = assigns) when is_binary(to) and to != "" do
+    ~H"""
+    <.link href={@to} class={@class} target={@target} {link_opts(@opts, @label, @target)}>
+      <%= if @inner_block && @inner_block != [] do %>{render_slot(@inner_block)}<% else %>{@label}<% end %>
+    </.link>
+    """
+  end
+end

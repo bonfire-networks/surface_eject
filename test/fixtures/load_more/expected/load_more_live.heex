@@ -1,0 +1,79 @@
+<%= if is_binary(@cursor) do %>
+  <button
+    data-load-more-type={@infinite_scroll}
+    id={"load_more_#{@dom_id_suffix || @context}"}
+    data-id="load_more"
+    type="button"
+    data-page={@cursor}
+    data-entry-count={if @infinite_scroll == :preload, do: @entry_count}
+    data-announce-one={l("1 more item loaded")}
+    data-announce-many={l("%{count} more items loaded", count: "{count}")}
+    data-announce-generic={l("More content loaded")}
+    phx-scroll={if @infinite_scroll,
+      do:
+        if(@infinite_scroll == :preload,
+          do: "#{@live_handler}:preload_more",
+          else: "#{@live_handler}:load_more"
+        )}
+    phx-hook={if @infinite_scroll, do: "LoadMore", else: "Ignore"}
+    phx-click={"#{@live_handler}:load_more"}
+    phx-target={@target}
+    phx-value-context={@context}
+    phx-value-after={@cursor}
+    phx-value-limit={@limit}
+    phx-value-multiply_limit={@multiply_limit}
+    class="w-full flex items-center justify-center my-3"
+    x-data={"{show: #{socket_connected?(@__context__)}}"}
+    {@opts}
+  >
+    <span
+      class={[
+        @button_class || "btn btn-soft",
+        "phx-click-loading:bg-base-content/10 phx-click-loading:pointer-events-none phx-click-loading:cursor-not-allowed phx-scroll-loading:opacity-15 phx-scroll-loading:cursor-not-allowed relative"
+      ]}
+      x-cloak={!@hide_guest_fallback}
+      x-show={if @hide_guest_fallback, do: nil, else: "show"}
+    >
+      <%!-- Loading spinner that shows during scroll loading --%>
+      <span class="loading loading-spinner loading-sm items-center place-content-center hidden phx-scroll-loading:flex phx-click-loading:flex" />
+
+      <%!-- Button text --%>
+      <span class="phx-scroll-loading:hidden phx-click-loading:hidden">
+        {@label ||
+          if @infinite_scroll == :preload and @entry_count > 0,
+            do: l("Show %{num} more", num: @entry_count),
+            else: l("Load more")}
+      </span>
+    </span>
+    <a
+      :if={!@hide_guest_fallback}
+      data-id="next_page"
+      class="normal-case btn btn-primary btn-soft btn-wide"
+      x-cloak
+      x-show="!show"
+      href={append_params_uri(
+        @current_url || @__context__[:current_url],
+        %{
+          "#{@live_handler}[after]" => @cursor,
+          "#{@live_handler}[multiply_limit]" =>
+            if(is_integer(@multiply_limit) and @multiply_limit > 1, do: @multiply_limit)
+        }
+      )}
+    >
+      {l("Next page")}
+    </a>
+  </button>
+<% else %>
+  <%= if !@hide_if_no_more do %>
+    <%= if @if_no_more && @if_no_more != [] do %>{render_slot(@if_no_more)}<% else %>
+      <div class="flex items-center pt-3 my-3 place-content-center flex-col">
+        <Bonfire.UI.Common.NextGenImageLive
+          src="/images/bonfire-exausted.png"
+          alt="bonfire"
+          class="h-32 mx-auto"
+        />
+        <p class="text-sm text-muted font-medium">{l("That's all folks...")}</p>
+      </div>
+    <% end %>
+  <% end %>
+<% end %>
