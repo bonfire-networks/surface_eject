@@ -30,13 +30,13 @@ defmodule SurfaceEject.RenderEquivalenceTest do
 
       def render(assigns) do
         ~F\"\"\"
-        <div>
-          {#if @show}yes{#else}no{/if}
-          {#for x <- @items}<i>{x}</i>{#else}<em>empty</em>{/for}
-          <b>{@label}</b>
-          <#slot>fallback</#slot>
-          <#slot {@side} />
-        </div>
+          <div>
+            {#if @show}yes{#else}no{/if}
+            {#for x <- @items}<i>{x}</i>{#else}<em>empty</em>{/for}
+            <b>{@label}</b>
+            <#slot>fallback</#slot>
+            <#slot {@side} />
+          </div>
         \"\"\"
       end
     end
@@ -96,7 +96,7 @@ defmodule SurfaceEject.RenderEquivalenceTest do
         _ = var!(assigns)
         ~H\"\"\"
     #{conv_tpl}
-        \"\"\"
+    \"\"\"
       end
     end
     """)
@@ -135,7 +135,19 @@ defmodule SurfaceEject.RenderEquivalenceTest do
     assert_equivalent(~S(<Comp><u>inner</u></Comp>), %{})
   end
 
-  test "named slot entry renders through <#slot {@side}>" do
-    assert_equivalent(~S(<Comp><:side><s>side!</s></:side></Comp>), %{})
+  test "named slot entry + default content renders through both slots" do
+    assert_equivalent(~S(<Comp>body<:side><s>side!</s></:side></Comp>), %{})
+  end
+
+  # KNOWN DIVERGENCE (flagged :default_slot_fallback at conversion): a
+  # named-slots-only body — Surface renders the default-slot fallback; HEEx
+  # callers always produce a non-empty @inner_block for non-self-closing
+  # tags, so the converted side renders the (whitespace) body instead. This
+  # test pins the documented behavior so we notice if Phoenix changes it.
+  test "named-slots-only caller: default fallback diverges (documented)" do
+    tpl = ~S(<Comp><:side><s>side!</s></:side></Comp>)
+
+    assert surface_html(tpl, %{}) =~ "fallback"
+    refute converted_html(tpl, %{}) =~ "fallback"
   end
 end

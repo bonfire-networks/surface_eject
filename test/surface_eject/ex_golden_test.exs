@@ -16,7 +16,12 @@ defmodule SurfaceEject.ExGoldenTest do
     assert out == File.read!(Path.join(@fixtures, "link_inline/expected/link_live.ex"))
     refute out =~ "~F"
     # call sites unresolved or builtin-flagged only — nothing unexpected
-    assert Enum.all?(logs, &(&1.category in [:unknown_component, :surface_builtin, :use_atom]))
+    # (:default_slot_fallback is the standing caller-review advisory)
+    assert Enum.all?(
+             logs,
+             &(&1.category in
+                 [:unknown_component, :surface_builtin, :use_atom, :default_slot_fallback])
+           )
   end
 
   # sface-colocated Bonfire modules in :compat mode: NO ~F, declarations

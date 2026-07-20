@@ -32,7 +32,7 @@ defmodule SurfaceEject.HeexCompileTest do
       def render(var!(assigns)) do
         ~H\"\"\"
     #{heex}
-        \"\"\"
+    \"\"\"
       end
     end
     """
@@ -84,7 +84,7 @@ defmodule SurfaceEject.HeexCompileTest do
         _ = var!(assigns)
         ~H\"\"\"
     #{heex}
-        \"\"\"
+    \"\"\"
       end
     end
     """

@@ -21,7 +21,9 @@ defmodule SurfaceEject.Ex.Definitions do
 
   @doc "Returns `{converted_source, logs}`."
   def convert(source, %Context{} = ctx) do
+    {source, direct_logs} = rewrite_direct_surface_uses(source, ctx)
     {source, atom_logs} = rewrite_use_atoms(source, ctx)
+    atom_logs = direct_logs ++ atom_logs
 
     if declarations_mode(ctx) == :compat do
       {source, atom_logs}
@@ -29,6 +31,44 @@ defmodule SurfaceEject.Ex.Definitions do
       {source, logs} = do_convert(source, ctx)
       {source, atom_logs ++ logs}
     end
+  end
+
+  # `use Surface.Component` → `use Phoenix.Component` etc. — converted
+  # declarations/templates cannot compile through Surface's macros
+  @direct_use_map %{
+    [:Surface, :Component] => "Phoenix.Component",
+    [:Surface, :LiveComponent] => "Phoenix.LiveComponent",
+    [:Surface, :LiveView] => "Phoenix.LiveView"
+  }
+
+  defp rewrite_direct_surface_uses(source, ctx) do
+    ast = Sourceror.parse_string!(source)
+
+    {_, {patches, logs}} =
+      Macro.prewalk(ast, {[], []}, fn
+        {:use, _, [{:__aliases__, _, segments} = alias_node | _]} = node, {patches, logs}
+        when is_map_key(@direct_use_map, segments) ->
+          replacement = @direct_use_map[segments]
+          patch = %{range: Sourceror.get_range(alias_node), change: replacement}
+
+          {node,
+           {[patch | patches],
+            [
+              log(
+                ctx,
+                :info,
+                :use_module,
+                Sourceror.get_line(node),
+                "use #{Enum.join(segments, ".")} → use #{replacement}"
+              )
+              | logs
+            ]}}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    {Sourceror.patch_string(source, patches), Enum.reverse(logs)}
   end
 
   # `use MyWeb, :surface_atom` → `use MyWeb, :plain_atom` (profile use_atom_map)

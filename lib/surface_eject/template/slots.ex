@@ -8,6 +8,13 @@ defmodule SurfaceEject.Template.Slots do
     * `<#slot {@col, item} />`   → `{render_slot(@col, item)}`
     * `<#slot {@name}>F</#slot>` → `<%= if @name && @name != [] do %>{render_slot(@name)}<% else %>F<% end %>`
       (fallback children render only when no slot entry was passed)
+
+  Known divergence (flagged `:default_slot_fallback` at conversion): for the
+  DEFAULT slot, HEEx callers with a non-self-closing tag always produce a
+  non-empty `@inner_block` — even for `<Comp></Comp>` or a body holding only
+  named slots — so the converted fallback fires only for self-closing
+  callers. Named-slot fallback checks are exact (those entries exist only
+  when passed).
   """
 
   @doc "The render expression for a slot ref (`nil` = default slot)."

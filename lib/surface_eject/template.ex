@@ -73,6 +73,26 @@ defmodule SurfaceEject.Template do
       region(state, span, Slots.self_close(ref))
     else
       state = region(state, span, Slots.open_with_fallback(ref))
+
+      # HEEx creates an inner_block entry for EVERY non-self-closing caller
+      # (even `<Comp></Comp>` or named-slots-only bodies), so a converted
+      # default-slot fallback only fires for self-closing callers
+      state =
+        if ref == nil do
+          log(
+            state,
+            :warning,
+            :default_slot_fallback,
+            meta.line,
+            "default-slot fallback: under HEEx, callers with a non-self-closing tag " <>
+              "(even whitespace-only or named-slots-only bodies) produce a non-empty " <>
+              "@inner_block, so this fallback only renders for self-closing callers — " <>
+              "review callers (Surface rendered the fallback whenever no default content was passed)"
+          )
+        else
+          state
+        end
+
       %{state | slot_stack: [:slot | state.slot_stack]}
     end
   end
@@ -343,8 +363,6 @@ defmodule SurfaceEject.Template do
          )}
     end
   end
-
-  defp component_tag?(name), do: name =~ ~r/^[A-Z]/
 
   defp inspect_value({:string, s, _}), do: " (#{inspect(s)})"
   defp inspect_value(_), do: ""
