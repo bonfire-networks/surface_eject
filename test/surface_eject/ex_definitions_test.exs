@@ -2,6 +2,7 @@ defmodule SurfaceEject.ExDefinitionsTest do
   use ExUnit.Case, async: true
 
   alias SurfaceEject.{Context, Ex, Profile}
+  alias SurfaceEject.Profiles
 
   @generic %Context{profile: %Profile{declarations: :attr}}
   @compat %Context{profile: %Profile{declarations: :compat}}
@@ -132,7 +133,7 @@ defmodule SurfaceEject.ExDefinitionsTest do
 
     test "use-atom swap: Surface web-macro atoms → plain context-lib-wired atoms" do
       source = "defmodule A do\n  use My.Web, :stateless_component\nend\n"
-      bonfire = %Context{profile: SurfaceEject.Profile.bonfire()}
+      bonfire = %Context{profile: Profiles.Bonfire.profile()}
 
       out = convert(source, bonfire)
       assert out =~ "use My.Web, :function_component"

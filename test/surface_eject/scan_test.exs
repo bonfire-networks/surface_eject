@@ -1,9 +1,10 @@
 defmodule SurfaceEject.ScanTest do
   use ExUnit.Case, async: true
 
-  alias SurfaceEject.{Context, Profile, Scan}
+  alias SurfaceEject.{Context, Scan}
+  alias SurfaceEject.Profiles
 
-  @bonfire %Context{profile: Profile.bonfire()}
+  @bonfire %Context{profile: Profiles.Bonfire.profile()}
 
   test "detects direct Surface use" do
     assert %{module: "My.Card", type: :function_component} =

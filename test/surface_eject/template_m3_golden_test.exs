@@ -1,10 +1,11 @@
 defmodule SurfaceEject.TemplateM3GoldenTest do
   use ExUnit.Case, async: true
 
-  alias SurfaceEject.{Context, Profile, Template}
+  alias SurfaceEject.{Context, Template}
+  alias SurfaceEject.Profiles
 
   @fixtures Path.expand("../fixtures", __DIR__)
-  @ctx %Context{profile: Profile.bonfire()}
+  @ctx %Context{profile: Profiles.Bonfire.profile()}
 
   test "golden: group_view (surface_live_view page — blocks, :on-*, dynamic dispatch)" do
     {out, logs} = convert_fixture("group_view/input/group_live.sface")

@@ -12,6 +12,7 @@ defmodule SurfaceEject.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       test_ignore_filters: [~r{test/fixtures/}],
       start_permanent: Mix.env() == :prod,
+      escript: [main_module: SurfaceEject.CLI],
       deps: deps(),
       description: description(),
       package: package(),

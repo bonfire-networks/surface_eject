@@ -2,6 +2,7 @@ defmodule SurfaceEject.RenderEquivalenceTest do
   use ExUnit.Case, async: false
 
   alias SurfaceEject.{Context, Ex, Profile, Template}
+  alias SurfaceEject.Profiles
 
   @moduledoc """
   The semantic guarantee tier: the ORIGINAL Surface component and its
@@ -79,7 +80,7 @@ defmodule SurfaceEject.RenderEquivalenceTest do
 
     {conv_tpl, _} =
       Template.convert(caller_tpl, %Context{
-        profile: Profile.bonfire(),
+        profile: Profiles.Bonfire.profile(),
         type_map: %{comp => :function_component},
         aliases: %{"Comp" => comp}
       })

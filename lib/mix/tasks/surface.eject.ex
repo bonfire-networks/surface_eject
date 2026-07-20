@@ -11,7 +11,9 @@ defmodule Mix.Tasks.Surface.Eject do
   component types and aliases, converts `.ex` (declarations per profile +
   `~F` sigils) and `.sface` templates (renamed to `.heex`).
 
-  Profiles: `default` (generic) or `bonfire`. See `SurfaceEject.Profile`.
+  Profiles: `default` (generic), `bonfire`, or the name of a module in your
+  project exposing `profile/0` that returns a `%SurfaceEject.Profile{}`
+  (e.g. `--profile MyApp.EjectProfile`). See `SurfaceEject.Profile`.
   """
 
   use Igniter.Mix.Task
@@ -23,7 +25,7 @@ defmodule Mix.Tasks.Surface.Eject do
     %Igniter.Mix.Task.Info{
       group: :surface_eject,
       example: "mix surface.eject --profile bonfire --path lib --dry-run",
-      schema: [profile: :string, path: :string],
+      schema: [profile: :string, path: :string, scan_path: :keep, exclude: :keep],
       defaults: [profile: "default", path: "lib"]
     }
   end
@@ -33,20 +35,26 @@ defmodule Mix.Tasks.Surface.Eject do
     opts = igniter.args.options
     profile = profile!(opts[:profile])
     path = opts[:path] || "lib"
+    scan_paths = list_opt(opts, :scan_path)
 
     # read through Igniter's virtual FS (works with Igniter.Test projects too)
-    igniter = Igniter.include_glob(igniter, Path.join(path, "**/*.{ex,sface}"))
+    igniter =
+      Enum.reduce([path | scan_paths], igniter, fn root, igniter ->
+        Igniter.include_glob(igniter, Path.join(root, "**/*.{ex,sface}"))
+      end)
 
-    files =
-      for source <- Rewrite.sources(igniter.rewrite),
-          file = Rewrite.Source.get(source, :path),
-          Path.extname(file) in [".ex", ".sface"],
-          String.starts_with?(file, path),
-          into: %{} do
-        {file, Rewrite.Source.get(source, :content)}
-      end
+    contents =
+      Map.new(Rewrite.sources(igniter.rewrite), fn source ->
+        {Rewrite.Source.get(source, :path), Rewrite.Source.get(source, :content)}
+      end)
 
-    {actions, _logs} = Runner.plan(files, profile)
+    {convert_paths, scan_only_paths} =
+      SurfaceEject.Files.partition(Map.keys(contents), path, scan_paths, list_opt(opts, :exclude))
+
+    {actions, _logs} =
+      Runner.plan(Map.take(contents, convert_paths), profile,
+        scan_files: Map.take(contents, scan_only_paths)
+      )
 
     Enum.reduce(actions, igniter, fn
       {file, {:write, content, _logs}}, igniter ->
@@ -56,6 +64,9 @@ defmodule Mix.Tasks.Surface.Eject do
         igniter
         |> update(file, content)
         |> Igniter.move_file(file, new_path)
+
+      {_file, {:error, message, _logs}}, igniter ->
+        Igniter.add_warning(igniter, "surface.eject: #{message}")
 
       {_file, :unchanged}, igniter ->
         igniter
@@ -68,6 +79,26 @@ defmodule Mix.Tasks.Surface.Eject do
     end)
   end
 
-  defp profile!("bonfire"), do: Profile.bonfire()
-  defp profile!(_), do: %Profile{}
+  # :keep options arrive as a scalar when passed once, a list when repeated
+  defp list_opt(opts, key), do: opts |> Keyword.get_values(key) |> List.flatten()
+
+  defp profile!(name) do
+    SurfaceEject.Profiles.builtin(name) || custom_profile!(name)
+  end
+
+  defp custom_profile!(module_name) do
+    module = Igniter.Project.Module.parse(module_name)
+
+    with {:module, ^module} <- Code.ensure_loaded(module),
+         true <- function_exported?(module, :profile, 0),
+         %Profile{} = profile <- module.profile() do
+      profile
+    else
+      _ ->
+        Mix.raise(
+          "--profile must be \"default\", \"bonfire\", or a loaded module exposing " <>
+            "profile/0 returning a %SurfaceEject.Profile{} — got: #{module_name}"
+        )
+    end
+  end
 end

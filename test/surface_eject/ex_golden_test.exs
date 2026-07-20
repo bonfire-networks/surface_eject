@@ -1,10 +1,11 @@
 defmodule SurfaceEject.ExGoldenTest do
   use ExUnit.Case, async: true
 
-  alias SurfaceEject.{Context, Ex, Profile}
+  alias SurfaceEject.{Context, Ex}
+  alias SurfaceEject.Profiles
 
   @fixtures Path.expand("../fixtures", __DIR__)
-  @compat Profile.bonfire()
+  @compat Profiles.Bonfire.profile()
 
   # inline-~F module (8 sigils) in :compat mode — reviewed snapshot
   # (generated once by the converter, human-reviewed, then pinned)

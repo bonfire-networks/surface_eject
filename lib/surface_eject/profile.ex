@@ -11,6 +11,12 @@ defmodule SurfaceEject.Profile do
       lines untouched).
     * `:remote_call` — call-site convention: `:render` (safe default) or
       `:snake_name` (post-MVP).
+
+  Built-in profiles are separate modules under `SurfaceEject.Profiles.*`
+  (e.g. `SurfaceEject.Profiles.Bonfire`), each exposing `profile/0`. To use
+  your own, define such a module in your project and pass its name:
+
+      mix surface.eject --profile MyApp.EjectProfile
   """
 
   defstruct declarations: :attr,
@@ -28,44 +34,4 @@ defmodule SurfaceEject.Profile do
             aliases: %{},
             form_components: %{},
             context: :flag_all
-
-  def bonfire do
-    %__MODULE__{
-      declarations: :compat,
-      web_module: :preserve,
-      remote_call: :render,
-      web_macros: %{
-        stateless_component: :function_component,
-        stateful_component: :live_component,
-        surface_live_view: :live_view
-      },
-      # converted modules must compile through the context-lib-wired PLAIN
-      # macros (the Surface atoms keep the Surface stack for unconverted
-      # extensions during incremental migration) — one-token use-line rewrite
-      use_atom_map: %{
-        stateless_component: :function_component,
-        stateful_component: :live_component,
-        surface_live_view: :live_view
-      },
-      # macros that take web-macro atoms like `use` does (Bonfire's LVN variant)
-      use_like_macros: [:use_if_enabled],
-      dynamic_dispatch: %{
-        "StatelessComponent" => :suffix_render,
-        "StatefulComponent" => :suffix_render
-      },
-      # Surface-builtin aliases provided by Bonfire's web.ex surface_helpers —
-      # lets call-site resolution flag them as :surface_builtin
-      aliases:
-        Map.new(
-          ~w(Field FieldContext Label ErrorTag Inputs HiddenInput HiddenInputs TextInput TextArea NumberInput RadioButton Select MultipleSelect OptionsForSelect DateTimeSelect TimeSelect Checkbox ColorInput DateInput TimeInput DateTimeLocalInput EmailInput PasswordInput RangeInput SearchInput TelephoneInput UrlInput FileInput),
-          &{&1, "Surface.Components.Form.#{&1}"}
-        )
-        |> Map.merge(%{
-          "Form" => "Surface.Components.Form",
-          "Link" => "Surface.Components.Link",
-          "Button" => "Surface.Components.Link.Button"
-        }),
-      context: :library
-    }
-  end
 end

@@ -134,8 +134,8 @@ defmodule SurfaceEject.Ex.Definitions do
 
     {patches, logs} =
       Enum.reduce(groups, {[], []}, fn {decls, adjacent?}, acc ->
-        Enum.reduce(decls, acc, fn decl, {patches, logs} ->
-          decl_patch(decl, adjacent?, ctx, patches, logs)
+        Enum.reduce(decls, acc, fn {decl, doc}, {patches, logs} ->
+          decl_patch(decl, doc, adjacent?, ctx, patches, logs)
         end)
       end)
 
@@ -161,27 +161,36 @@ defmodule SurfaceEject.Ex.Definitions do
     groups
   end
 
-  defp body_groups({:__block__, _, stmts}), do: scan(stmts, [], [])
-  defp body_groups(single), do: scan([single], [], [])
+  defp body_groups({:__block__, _, stmts}), do: scan(stmts, nil, [], [])
+  defp body_groups(single), do: scan([single], nil, [], [])
 
-  defp scan([], current, groups), do: flush(current, false, groups) |> Enum.reverse()
+  defp scan([], _pending_doc, current, groups),
+    do: flush(current, false, groups) |> Enum.reverse()
 
-  defp scan([stmt | rest], current, groups) do
+  defp scan([stmt | rest], pending_doc, current, groups) do
     cond do
       decl?(stmt) ->
-        scan(rest, [stmt | current], groups)
+        # a preceding `@doc` pairs with THIS declaration (Surface consumed it; Phoenix attr/slot won't — it gets folded into a doc: option)
+        scan(rest, nil, [{stmt, pending_doc} | current], groups)
 
-      # module attributes (@doc etc.) between declarations don't break a group
+      doc_attr?(stmt) ->
+        scan(rest, stmt, current, groups)
+
+      # other module attributes between declarations don't break a group
       match?({:@, _, _}, stmt) and current != [] ->
-        scan(rest, current, groups)
+        scan(rest, pending_doc, current, groups)
 
       component_def?(stmt) ->
-        scan(rest, [], flush(current, true, groups))
+        # pending @doc before a def belongs to the def — leave it alone
+        scan(rest, nil, [], flush(current, true, groups))
 
       true ->
-        scan(rest, [], flush(current, false, groups))
+        scan(rest, nil, [], flush(current, false, groups))
     end
   end
+
+  defp doc_attr?({:@, _, [{:doc, _, [_]}]}), do: true
+  defp doc_attr?(_), do: false
 
   defp flush([], _adjacent?, groups), do: groups
   defp flush(current, adjacent?, groups), do: [{Enum.reverse(current), adjacent?} | groups]
@@ -201,7 +210,7 @@ defmodule SurfaceEject.Ex.Definitions do
 
   ## per-declaration patches
 
-  defp decl_patch({:data, meta, _args} = _decl, _adjacent?, ctx, patches, logs) do
+  defp decl_patch({:data, meta, _args} = _decl, _doc, _adjacent?, ctx, patches, logs) do
     {patches,
      [
        log(
@@ -215,7 +224,7 @@ defmodule SurfaceEject.Ex.Definitions do
      ]}
   end
 
-  defp decl_patch(decl, false, ctx, patches, logs) do
+  defp decl_patch(decl, _doc, false, ctx, patches, logs) do
     {_, meta, _} = decl
 
     {patches,
@@ -231,11 +240,20 @@ defmodule SurfaceEject.Ex.Definitions do
      ]}
   end
 
-  defp decl_patch({:prop, _meta, [{name, _, _}, type | rest]} = decl, true, ctx, patches, logs) do
+  defp decl_patch(
+         {:prop, _meta, [{name, _, var_ctx}, type | rest]} = decl,
+         doc,
+         true,
+         ctx,
+         patches,
+         logs
+       )
+       when is_atom(name) and is_atom(var_ctx) do
     {mapped, log_cat} = TypeTable.map(unwrap_atom(type))
     line = Sourceror.get_line(decl)
 
-    text = "attr :#{name}, #{inspect(mapped)}#{opts_suffix(rest)}"
+    text = "attr :#{name}, #{inspect(mapped)}#{opts_suffix(rest)}#{doc_suffix(doc)}"
+    patches = doc_patches(doc, patches)
     patches = [%{range: Sourceror.get_range(decl), change: text} | patches]
 
     logs =
@@ -255,13 +273,25 @@ defmodule SurfaceEject.Ex.Definitions do
     {patches, logs}
   end
 
-  defp decl_patch({:slot, _meta, [{name, _, _} | rest]} = decl, true, ctx, patches, logs) do
+  # only the VAR form (`slot default` — Surface syntax) converts; a literal
+  # atom (`slot :inner_block`, already-plain Phoenix, wrapped by Sourceror as
+  # `{:__block__, _, [atom]}`) must fall through untouched (re-run safety)
+  defp decl_patch(
+         {:slot, _meta, [{name, _, var_ctx} | rest]} = decl,
+         doc,
+         true,
+         ctx,
+         patches,
+         logs
+       )
+       when is_atom(name) and is_atom(var_ctx) do
     line = Sourceror.get_line(decl)
     slot_name = if name == :default, do: :inner_block, else: name
 
     {rest, dropped_arg?} = drop_slot_args(rest)
 
-    text = "slot #{inspect(slot_name)}#{opts_suffix(rest)}"
+    text = "slot #{inspect(slot_name)}#{opts_suffix(rest)}#{doc_suffix(doc)}"
+    patches = doc_patches(doc, patches)
     patches = [%{range: Sourceror.get_range(decl), change: text} | patches]
 
     logs =
@@ -281,9 +311,33 @@ defmodule SurfaceEject.Ex.Definitions do
     {patches, logs}
   end
 
-  defp decl_patch(_other, _adjacent?, _ctx, patches, logs), do: {patches, logs}
+  defp decl_patch(_other, _doc, _adjacent?, _ctx, patches, logs), do: {patches, logs}
 
   ## helpers
+
+  # a paired `@doc "..."` folds into the declaration's doc: option (Surface's macros consumed @doc; Phoenix's don't, left alone it would redefine repeatedly and end up documenting render/1); non-string @doc (false, dynamic) stays untouched
+  defp doc_string({:@, _, [{:doc, _, [arg]}]}) do
+    case arg do
+      {:__block__, _, [string]} when is_binary(string) -> string
+      string when is_binary(string) -> string
+      _ -> nil
+    end
+  end
+
+  defp doc_string(_), do: nil
+
+  defp doc_suffix(doc) do
+    case doc_string(doc) do
+      nil -> ""
+      string -> ", doc: #{inspect(string)}"
+    end
+  end
+
+  defp doc_patches(doc, patches) do
+    if doc_string(doc),
+      do: [%{range: Sourceror.get_range(doc), change: ""} | patches],
+      else: patches
+  end
 
   defp unwrap_atom({:__block__, _, [atom]}) when is_atom(atom), do: atom
   defp unwrap_atom(atom) when is_atom(atom), do: atom

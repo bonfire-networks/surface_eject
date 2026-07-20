@@ -285,6 +285,25 @@ defmodule SurfaceEject.Template do
     )
   end
 
+  # Surface's comma-list attr sugar (`class={"a", "b": cond}`, :css_class / :list props) is NOT valid HEEx, the braces would parse as a tuple and render garbage. Flag rather than silently emit (rewrite to a `[...]`
+  # list, keyword pairs as `cond && "class"`).
+  defp attr({name, {:expr, expr, emeta}, _ameta}, _tag_meta, state) do
+    case Code.string_to_quoted("[#{expr}]") do
+      {:ok, list} when is_list(list) and length(list) > 1 ->
+        log(
+          state,
+          :manual_required,
+          :attr_comma_list,
+          emeta.line,
+          "#{name}={#{expr}} uses Surface's comma-list sugar — invalid HEEx (parses as a tuple); " <>
+            "rewrite as a list: #{name}={[...]} with keyword pairs as `cond && \"class\"`"
+        )
+
+      _ ->
+        state
+    end
+  end
+
   defp attr(_attr, _tag_meta, state), do: state
 
   ## helpers

@@ -1,10 +1,11 @@
 defmodule SurfaceEject.CallSitesTest do
   use ExUnit.Case, async: true
 
-  alias SurfaceEject.{Context, Profile, Template}
+  alias SurfaceEject.{Context, Template}
+  alias SurfaceEject.Profiles
 
   @ctx %Context{
-    profile: Profile.bonfire(),
+    profile: Profiles.Bonfire.profile(),
     type_map: %{
       "Some.Card" => :function_component,
       "Some.Live" => :live_component
