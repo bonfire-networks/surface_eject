@@ -120,17 +120,17 @@ defmodule Bonfire.UI.Common.LinkLive do
       target={@target}
       class="float-right ml-4 flex items-center gap-2 btn btn-sm"
     >
-      <#Icon iconify="ri:file-copy-line" class="w-4 h-4 shrink-0" />
+      <Iconify.iconify icon="ri:file-copy-line" class="w-4 h-4 shrink-0" />
       <span data-role="label">{l("Copy")}</span>
     </a>
 
-    <Link
-      to={@to}
+    <.link
+      href={@to}
       class={@class}
-      opts={link_opts(@opts, @label, @target) |> Keyword.merge(target: @target)}
+      {link_opts(@opts, @label, @target) |> Keyword.merge(target: @target)}
     >
       <%= if @inner_block && @inner_block != [] do %>{render_slot(@inner_block)}<% else %>{@label}<% end %>
-    </Link>
+    </.link>
 
     <%!-- TODO: make these configurable --%>
     <%= case Unfurl.uri_host(@to) do %>
@@ -139,17 +139,17 @@ defmodule Bonfire.UI.Common.LinkLive do
           <%= case URI.encode_www_form(domain) do %>
             <% url_encoded -> %>
               Check URL:
-              <Link
-                to={"https://transparencyreport.google.com/safe-browsing/search?url=#{url_encoded}"}
-                opts={@opts |> Keyword.merge(target: "_blank")}
+              <.link
+                href={"https://transparencyreport.google.com/safe-browsing/search?url=#{url_encoded}"}
+                {@opts |> Keyword.merge(target: "_blank")}
                 class="btn btn-sm"
-              >{l("Google Safe Browsing")}</Link>
+              >{l("Google Safe Browsing")}</.link>
 
-              <Link
-                to={"https://urlscan.io/search/#page.url.keyword:#{url_encoded}*"}
-                opts={@opts |> Keyword.merge(target: "_blank")}
+              <.link
+                href={"https://urlscan.io/search/#page.url.keyword:#{url_encoded}*"}
+                {@opts |> Keyword.merge(target: "_blank")}
                 class="btn btn-sm"
-              >{l("URLscan")}</Link>
+              >{l("URLscan")}</.link>
 
               <%!--
                     <Link
@@ -160,41 +160,41 @@ defmodule Bonfire.UI.Common.LinkLive do
 
           --%>
 
-              <Link
-                to={"https://otx.alienvault.com/indicator/domain/#{url_encoded}"}
-                opts={@opts |> Keyword.merge(target: "_blank")}
+              <.link
+                href={"https://otx.alienvault.com/indicator/domain/#{url_encoded}"}
+                {@opts |> Keyword.merge(target: "_blank")}
                 class="btn btn-sm"
-              >{l("AlienVault OTX")}</Link>
+              >{l("AlienVault OTX")}</.link>
 
-              <Link
-                to={"https://www.virustotal.com/gui/search/#{url_encoded}"}
-                opts={@opts |> Keyword.merge(target: "_blank")}
+              <.link
+                href={"https://www.virustotal.com/gui/search/#{url_encoded}"}
+                {@opts |> Keyword.merge(target: "_blank")}
                 class="btn btn-sm"
-              >{l("VirusTotal")}</Link>
+              >{l("VirusTotal")}</.link>
 
-              <Link
-                to={"https://sitecheck.sucuri.net/results/#{url_encoded}"}
-                opts={@opts |> Keyword.merge(target: "_blank")}
+              <.link
+                href={"https://sitecheck.sucuri.net/results/#{url_encoded}"}
+                {@opts |> Keyword.merge(target: "_blank")}
                 class="btn btn-sm"
-              >{l("Sucuri")}</Link>
+              >{l("Sucuri")}</.link>
 
-              <Link
-                to={"https://safeweb.norton.com/report?url=#{url_encoded}"}
-                opts={@opts |> Keyword.merge(target: "_blank")}
+              <.link
+                href={"https://safeweb.norton.com/report?url=#{url_encoded}"}
+                {@opts |> Keyword.merge(target: "_blank")}
                 class="btn btn-sm"
-              >{l("Norton")}</Link>
+              >{l("Norton")}</.link>
 
-              <Link
-                to={"https://check.spamhaus.org/results/?query=#{url_encoded}"}
-                opts={@opts |> Keyword.merge(target: "_blank")}
+              <.link
+                href={"https://check.spamhaus.org/results/?query=#{url_encoded}"}
+                {@opts |> Keyword.merge(target: "_blank")}
                 class="btn btn-sm"
-              >{l("SpamHaus")}</Link>
+              >{l("SpamHaus")}</.link>
 
-              <Link
-                to={"https://mxtoolbox.com/SuperTool.aspx?action=blacklist:#{url_encoded}"}
-                opts={@opts |> Keyword.merge(target: "_blank")}
+              <.link
+                href={"https://mxtoolbox.com/SuperTool.aspx?action=blacklist:#{url_encoded}"}
+                {@opts |> Keyword.merge(target: "_blank")}
                 class="btn btn-sm"
-              >{l("MX Toolbox")}</Link>
+              >{l("MX Toolbox")}</.link>
           <% end %>
         </p>
 
@@ -203,23 +203,23 @@ defmodule Bonfire.UI.Common.LinkLive do
             ~> debug("IPadr") do %>
             <% ip when is_binary(ip) -> %>
               Check IP:
-              <Link
-                to={"https://www.abuseipdb.com/check/#{ip}"}
-                opts={@opts |> Keyword.merge(target: "_blank")}
+              <.link
+                href={"https://www.abuseipdb.com/check/#{ip}"}
+                {@opts |> Keyword.merge(target: "_blank")}
                 class="btn btn-sm"
-              >{l("AbuseIPDB")}</Link>
+              >{l("AbuseIPDB")}</.link>
 
-              <Link
-                to={"https://otx.alienvault.com/indicator/ip/#{ip}"}
-                opts={@opts |> Keyword.merge(target: "_blank")}
+              <.link
+                href={"https://otx.alienvault.com/indicator/ip/#{ip}"}
+                {@opts |> Keyword.merge(target: "_blank")}
                 class="btn btn-sm"
-              >{l("AlienVault OTX")}</Link>
+              >{l("AlienVault OTX")}</.link>
 
-              <Link
-                to={"https://www.projecthoneypot.org/ip_#{ip}"}
-                opts={@opts |> Keyword.merge(target: "_blank")}
+              <.link
+                href={"https://www.projecthoneypot.org/ip_#{ip}"}
+                {@opts |> Keyword.merge(target: "_blank")}
                 class="btn btn-sm"
-              >{l("Project Honeypot")}</Link>
+              >{l("Project Honeypot")}</.link>
             <% _ -> %>
           <% end %>
         </p>
@@ -231,13 +231,13 @@ defmodule Bonfire.UI.Common.LinkLive do
     case local_path(assigns.to) do
       nil ->
         ~H"""
-        <Link
-          to={@to}
+        <.link
+          href={@to}
           class={@class}
-          opts={link_opts(@opts, @label, @target) |> Keyword.merge(target: @target)}
+          {link_opts(@opts, @label, @target) |> Keyword.merge(target: @target)}
         >
           <%= if @inner_block && @inner_block != [] do %>{render_slot(@inner_block)}<% else %>{@label}<% end %>
-        </Link>
+        </.link>
         """
 
       path ->
@@ -268,22 +268,22 @@ defmodule Bonfire.UI.Common.LinkLive do
   # (in an embed it would open a new tab / navigate _top instead of scrolling).
   defp render_link(%{to: "#" <> _} = assigns) do
     ~H"""
-    <Link to={@to} class={@class} opts={link_opts(@opts, @label, nil)}>
+    <.link href={@to} class={@class} {link_opts(@opts, @label, nil)}>
       <%= if @inner_block && @inner_block != [] do %>{render_slot(@inner_block)}<% else %>{@label}<% end %>
-    </Link>
+    </.link>
     """
   end
 
   defp render_link(%{__context__: %{current_app: :bonfire_pages}} = assigns) do
     # TODO: this should only apply to links to Page views, not internal pages
     ~H"""
-    <Link
-      to={@to}
+    <.link
+      href={@to}
       class={@class}
-      opts={link_opts(@opts, @label, @target) |> Keyword.merge(target: @target)}
+      {link_opts(@opts, @label, @target) |> Keyword.merge(target: @target)}
     >
       <%= if @inner_block && @inner_block != [] do %>{render_slot(@inner_block)}<% else %>{@label}<% end %>
-    </Link>
+    </.link>
     """
   end
 

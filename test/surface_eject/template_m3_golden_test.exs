@@ -15,11 +15,12 @@ defmodule SurfaceEject.TemplateM3GoldenTest do
     assert Enum.count(logs, &(&1.category == :unknown_component)) == 1
   end
 
-  test "golden: form (Surface built-ins flagged, left unchanged)" do
+  test "golden: form (Form → .form + #Icon → Iconify.iconify)" do
     {out, logs} = convert_fixture("form/input/new_group_form_live.sface")
 
     assert out == expected("form/expected/new_group_form_live.heex")
-    assert Enum.any?(logs, &(&1.category == :surface_builtin and &1.severity == :manual_required))
+    # everything Surface-specific in this fixture is now mapped — no flags left
+    refute Enum.any?(logs, &(&1.severity == :manual_required))
   end
 
   defp convert_fixture(rel) do

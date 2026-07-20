@@ -15,6 +15,7 @@ defmodule SurfaceEject.Template do
   """
 
   alias SurfaceEject.{Context, LogEntry}
+  alias SurfaceEject.Template.FieldClusters
   alias SurfaceEject.Template.{BlockIndex, CallSites, Slots, Splicer}
 
   # directives that are valid HEEx as-is
@@ -37,6 +38,16 @@ defmodule SurfaceEject.Template do
       pairs: CallSites.prescan(tokens),
       stack: [],
       slot_stack: [],
+      # enclosing <Field>-style entries: {:convertible, access, var} (Field→div with an explicit form binding) or :opaque (flagged, as inner controls rely on Surface's form context and must NOT be tag-converted)
+      field_stack: [],
+      # pre-pass for Field↔Form pairing + form bindings
+      clusters: FieldClusters.prescan(tokens, ctx),
+      # attr positions already rewritten by form-component mapping (exempt from the comma-list flag)
+      handled_attrs: MapSet.new(),
+      # open macro components that were flagged (their close tags must not be renamed)
+      macro_bail_stack: [],
+      # open positions of <Link> tags that converted (their close renames too)
+      converted_links: MapSet.new(),
       regions: [],
       logs: []
     }
@@ -103,9 +114,19 @@ defmodule SurfaceEject.Template do
     %{state | slot_stack: tl(state.slot_stack)}
   end
 
+  # MacroComponents (`<#Tag>`) are Surface-only syntax — invalid HEEx.
+  # Mapped ones (profile macro_components) convert; the rest are flagged.
+  defp token({:tag_open, "#" <> mname, attrs, meta}, state) do
+    macro_open(mname, attrs, meta, state)
+  end
+
+  defp token({:tag_close, "#" <> mname, meta}, state) do
+    macro_close(mname, meta, state)
+  end
+
   defp token({:tag_open, name, attrs, meta}, state) do
-    state = call_site_open(name, meta, state)
-    Enum.reduce(attrs, state, &attr(&1, meta, &2))
+    state = call_site_open(name, attrs, meta, state)
+    Enum.reduce(attrs, state, &attr(&1, {name, meta}, &2))
   end
 
   defp token({:tag_close, name, meta}, state) do
@@ -116,7 +137,7 @@ defmodule SurfaceEject.Template do
 
   ## component call sites (M3)
 
-  defp call_site_open(name, meta, state) do
+  defp call_site_open(name, attrs, meta, state) do
     case CallSites.resolve(name, state.ctx) do
       :skip ->
         state
@@ -125,26 +146,34 @@ defmodule SurfaceEject.Template do
         region(state, tag_name_span(meta), name <> ".render")
 
       {:live_component, full} ->
-        if slot_children?(state, meta) do
-          log(
-            state,
-            :manual_required,
-            :live_component_slots,
-            meta.line,
-            "<#{name}> passes slot entries — <.live_component> cannot receive them; left unchanged (convert callers after redesign, or the callee's slots)"
-          )
-        else
-          region(state, tag_name_span(meta), ".live_component module={#{full}}")
+        cond do
+          not slot_children?(state, meta) ->
+            region(state, tag_name_span(meta), ".live_component module={#{full}}")
+
+          entry = slot_entrypoint(state, full) ->
+            # the entry point is a function component on the module that
+            # accepts the slots and forwards them as assigns
+            state
+            |> region(tag_name_span(meta), "#{name}.#{entry}")
+            |> log(
+              :info,
+              :slot_entrypoint,
+              meta.line,
+              "<#{name}> passes slot entries — renamed to the #{entry}/1 function-component entry point"
+            )
+
+          true ->
+            log(
+              state,
+              :manual_required,
+              :live_component_slots,
+              meta.line,
+              "<#{name}> passes slot entries — <.live_component> cannot receive them; left unchanged (convert callers after redesign, or the callee's slots)"
+            )
         end
 
-      :surface_builtin ->
-        log(
-          state,
-          :manual_required,
-          :surface_builtin,
-          meta.line,
-          "Surface built-in <#{name}> left unchanged — map via profile form_components or convert manually"
-        )
+      {:surface_builtin, resolved} ->
+        builtin_open(resolved, name, attrs, meta, state)
 
       :unknown_component ->
         log(
@@ -162,21 +191,369 @@ defmodule SurfaceEject.Template do
       :render_suffix ->
         region(state, tag_name_span(meta), name <> ".render")
 
-      {:live_component, _full} ->
+      {:live_component, full} ->
         case state.pairs[{meta.line, meta.column}] do
           {:close_of, open_pos} ->
-            if get_in(state.pairs, [open_pos, :slot_children]),
-              do: state,
-              else: region(state, tag_name_span(meta), ".live_component")
+            cond do
+              not get_in(state.pairs, [open_pos, :slot_children]) ->
+                region(state, tag_name_span(meta), ".live_component")
+
+              entry = slot_entrypoint(state, full) ->
+                region(state, tag_name_span(meta), "#{name}.#{entry}")
+
+              true ->
+                state
+            end
 
           _ ->
             state
         end
 
+      {:surface_builtin, resolved} ->
+        builtin_close(resolved, meta, state)
+
       _ ->
         state
     end
   end
+
+  ## Form-component mapping (profile builtin_components):
+  ## <Form> → <.form>, standalone input controls → <.input type=...>,
+  ## <Label> → <.label>. Anything inside a <Field>-style cluster relies on
+  ## Surface's form context and stays flagged (structural collapse).
+
+  @field "Surface.Components.Form.Field"
+  @inputs "Surface.Components.Form.Inputs"
+  @opaque_clusters ~w(Surface.Components.Form.FieldContext)
+  @error_tag "Surface.Components.Form.ErrorTag"
+
+  defp builtin_open(resolved, name, attrs, meta, state) do
+    spec = form_mapping(state)[resolved]
+    binding = field_binding(state)
+
+    cond do
+      resolved == @field ->
+        field_open(name, attrs, meta, state)
+
+      resolved == @inputs ->
+        inputs_open(name, attrs, meta, state)
+
+      resolved in @opaque_clusters ->
+        state |> builtin_flag(name, meta) |> push_field(:opaque, meta)
+
+      # inside a converted Field, .input renders errors itself
+      resolved == @error_tag and match?({:convertible, _, _}, binding) and meta.self_close ->
+        state
+        |> region({{meta.line, meta.column - 1}, node_end(meta)}, "")
+        |> log(
+          :info,
+          :error_tag_dropped,
+          meta.line,
+          "<ErrorTag> dropped — the converted <.input field=...> renders errors itself"
+        )
+
+      # plain links only: method/label/event props carry Surface semantics
+      spec == :link and binding != :opaque and link_convertible?(attrs) ->
+        state
+        |> region(tag_name_span(meta), ".link")
+        |> form_attrs(attrs, %{"to" => "href"})
+        |> then(
+          &%{&1 | converted_links: MapSet.put(&1.converted_links, {meta.line, meta.column})}
+        )
+
+      spec == nil or spec == :link or binding == :opaque or
+          (match?({:input, _}, spec) and not meta.self_close) ->
+        builtin_flag(state, name, meta)
+
+      true ->
+        form_open(spec, attrs, meta, state, binding)
+    end
+  end
+
+  @link_surface_props ~w(method label click click_away capture_click blur focus window_blur window_focus keydown keyup)
+
+  defp link_convertible?(attrs) do
+    not Enum.any?(attrs, fn
+      {aname, _value, _ameta} -> aname in @link_surface_props
+      _other -> false
+    end)
+  end
+
+  defp builtin_flag(state, name, meta) do
+    log(
+      state,
+      :manual_required,
+      :surface_builtin,
+      meta.line,
+      "Surface built-in <#{name}> left unchanged — map via profile builtin_components or convert manually"
+    )
+  end
+
+  # a convertible <Field> becomes the <div> Surface rendered anyway; its name attr is deleted (children get explicit field= bindings instead)
+  defp field_open(name, attrs, meta, state) do
+    case state.clusters.fields[{meta.line, meta.column}] do
+      {:convert, access, var} ->
+        state
+        |> region(tag_name_span(meta), "div")
+        |> delete_attr(attrs, "name")
+        |> push_field({:convertible, access, var}, meta)
+
+      _ ->
+        state |> builtin_flag(name, meta) |> push_field(:opaque, meta)
+    end
+  end
+
+  # <Inputs for={:assoc}> is Surface's wrapper around Phoenix's own
+  # <.inputs_for> — convert to it directly, introducing the nested binding
+  defp inputs_open(name, attrs, meta, state) do
+    case state.clusters.inputs[{meta.line, meta.column}] do
+      {:convert, access, var} ->
+        name_end = {meta.line_end, meta.column_end}
+        nested = FieldClusters.nested_var()
+
+        state
+        |> region(tag_name_span(meta), ".inputs_for")
+        |> region({name_end, name_end}, " :let={#{nested}} field={#{var}[#{access}]}")
+        |> delete_attr(attrs, "for")
+        |> push_field({:inputs, nested}, meta)
+
+      _ ->
+        state |> builtin_flag(name, meta) |> push_field(:opaque, meta)
+    end
+  end
+
+  defp builtin_close(resolved, meta, state) do
+    spec = form_mapping(state)[resolved]
+
+    cond do
+      resolved == @inputs ->
+        state =
+          if state.clusters.inputs_closes[{meta.line, meta.column}] == :convert,
+            do: region(state, tag_name_span(meta), ".inputs_for"),
+            else: state
+
+        pop_field(state)
+
+      resolved == @field ->
+        state =
+          if state.clusters.field_closes[{meta.line, meta.column}] == :convert,
+            do: region(state, tag_name_span(meta), "div"),
+            else: state
+
+        pop_field(state)
+
+      resolved in @opaque_clusters ->
+        pop_field(state)
+
+      field_binding(state) == :opaque ->
+        state
+
+      spec == :link ->
+        case state.pairs[{meta.line, meta.column}] do
+          {:close_of, open_pos} ->
+            if MapSet.member?(state.converted_links, open_pos),
+              do: region(state, tag_name_span(meta), ".link"),
+              else: state
+
+          _ ->
+            state
+        end
+
+      spec == :form ->
+        region(state, tag_name_span(meta), ".form")
+
+      match?({:rename, _}, spec) ->
+        {:rename, new} = spec
+        region(state, tag_name_span(meta), "." <> new)
+
+      true ->
+        state
+    end
+  end
+
+  defp push_field(state, entry, meta) do
+    if meta.self_close,
+      do: state,
+      else: %{state | field_stack: [entry | state.field_stack]}
+  end
+
+  defp pop_field(%{field_stack: [_ | rest]} = state), do: %{state | field_stack: rest}
+  defp pop_field(state), do: state
+
+  # nil = not inside a Field; :opaque = inside an unconverted cluster;
+  # {:convertible, access, var} = inside a converted Field
+  defp field_binding(%{field_stack: []}), do: nil
+
+  defp field_binding(%{field_stack: stack}) do
+    if Enum.any?(stack, &(&1 == :opaque)), do: :opaque, else: hd(stack)
+  end
+
+  defp delete_attr(state, attrs, name) do
+    Enum.reduce(attrs, state, fn
+      {^name, value, ameta}, state ->
+        region(state, {{ameta.line, max(ameta.column - 1, 1)}, value_end(value, ameta)}, "")
+
+      _attr, state ->
+        state
+    end)
+  end
+
+  ## macro components
+
+  defp macro_open(mname, attrs, meta, state) do
+    case macro_mapping(state)[mname] do
+      {:component, new_tag, rules} ->
+        if macro_convertible?(attrs, rules) do
+          state
+          |> region(tag_name_span(meta), new_tag)
+          |> macro_attrs(attrs, rules)
+        else
+          state
+          |> macro_flag(mname, meta)
+          |> macro_bail(mname, meta)
+        end
+
+      _ ->
+        state
+        |> macro_flag(mname, meta)
+        |> macro_bail(mname, meta)
+    end
+  end
+
+  defp macro_close(mname, meta, state) do
+    case {state.macro_bail_stack, macro_mapping(state)[mname]} do
+      {[^mname | rest], _} -> %{state | macro_bail_stack: rest}
+      {_, {:component, new_tag, _rules}} -> region(state, tag_name_span(meta), new_tag)
+      _ -> state
+    end
+  end
+
+  defp macro_flag(state, mname, meta) do
+    log(
+      state,
+      :manual_required,
+      :macro_component,
+      meta.line,
+      "MacroComponent <##{mname}> left unchanged — not valid HEEx; map via profile macro_components or convert manually"
+    )
+  end
+
+  defp macro_bail(state, mname, meta) do
+    if meta.self_close,
+      do: state,
+      else: %{state | macro_bail_stack: [mname | state.macro_bail_stack]}
+  end
+
+  # rule-relevant attrs must be literal strings (MacroComponent static props
+  # always are; anything else means we can't statically rewrite — flag)
+  defp macro_convertible?(attrs, rules) do
+    Enum.all?(attrs, fn
+      {aname, value, _ameta} when is_map_key(rules, aname) -> match?({:string, _, _}, value)
+      _ -> true
+    end)
+  end
+
+  defp macro_attrs(state, attrs, rules) do
+    Enum.reduce(attrs, state, fn
+      {aname, value, ameta}, state when is_map_key(rules, aname) ->
+        case {rules[aname], value} do
+          {{:rename, new}, _} ->
+            region(state, attr_name_span(ameta), new)
+
+          {{:literal, new, prefix, suffix}, {:string, text, smeta}} ->
+            state
+            |> region(attr_name_span(ameta), new)
+            |> region(
+              {{smeta.line, smeta.column}, {smeta.line_end, smeta.column_end}},
+              prefix <> text <> suffix
+            )
+        end
+
+      _attr, state ->
+        state
+    end)
+  end
+
+  defp macro_mapping(%{ctx: %{profile: %{macro_components: map}}}) when is_map(map), do: map
+  defp macro_mapping(_state), do: %{}
+
+  defp form_mapping(%{ctx: %{profile: %{builtin_components: map}}}) when is_map(map), do: map
+  defp form_mapping(_state), do: %{}
+
+  defp form_open(:form, attrs, meta, state, _binding) do
+    name_end = {meta.line_end, meta.column_end}
+
+    # a convertible Field inside needs a form binding, add :let={form}
+    let =
+      if MapSet.member?(state.clusters.let_inserts, {meta.line, meta.column}),
+        do: " :let={form}",
+        else: ""
+
+    state
+    |> region(tag_name_span(meta), ".form")
+    |> then(fn state ->
+      if let == "", do: state, else: region(state, {name_end, name_end}, let)
+    end)
+    |> form_attrs(attrs, %{"submit" => "phx-submit", "change" => "phx-change"})
+  end
+
+  defp form_open({:input, type}, attrs, meta, state, binding) do
+    name_end = {meta.line_end, meta.column_end}
+
+    field =
+      case binding do
+        {:convertible, access, var} -> ~s( field=#{"{"}#{var}[#{access}]#{"}"})
+        _ -> ""
+      end
+
+    state
+    |> region(tag_name_span(meta), ".input")
+    |> region({name_end, name_end}, ~s( type="#{type}") <> field)
+    |> form_attrs(attrs, %{"selected" => "value"})
+  end
+
+  defp form_open({:rename, new}, _attrs, meta, state, _binding) do
+    region(state, tag_name_span(meta), "." <> new)
+  end
+
+  defp form_attrs(state, attrs, renames) do
+    Enum.reduce(attrs, state, fn
+      {"opts", {:expr, expr, emeta}, ameta}, state ->
+        opts_spread(state, expr, emeta, ameta)
+
+      {aname, _value, ameta}, state when is_map_key(renames, aname) ->
+        region(state, attr_name_span(ameta), renames[aname])
+
+      _attr, state ->
+        state
+    end)
+  end
+
+  # `opts={kw_or_expr}` → a root spread: `{expr}` when the expr is a single
+  # term, `{[pairs]}` when it's Surface's bare-keyword sugar (bare pairs are
+  # not a valid HEEx root expression)
+  defp opts_spread(state, expr, emeta, ameta) do
+    state = %{state | handled_attrs: MapSet.put(state.handled_attrs, {emeta.line, emeta.column})}
+    opts_to_brace = {{ameta.line, ameta.column}, {emeta.line, emeta.column}}
+
+    case Code.string_to_quoted("[#{expr}]") do
+      {:ok, [single]} when not (is_tuple(single) and tuple_size(single) == 2) ->
+        region(state, opts_to_brace, "{")
+
+      _keyword_or_multi ->
+        close_brace = {emeta.line_end, emeta.column_end}
+
+        state
+        |> region(opts_to_brace, "{[")
+        |> region({close_brace, close_brace}, "]")
+    end
+  end
+
+  defp slot_entrypoint(%{ctx: %{profile: %{live_component_slot_entrypoints: map}}}, full)
+       when is_map(map),
+       do: map[full]
+
+  defp slot_entrypoint(_state, _full), do: nil
 
   defp slot_children?(%{pairs: pairs}, meta) do
     case pairs[{meta.line, meta.column}] do
@@ -243,37 +620,65 @@ defmodule SurfaceEject.Template do
 
   ## attributes (directives)
 
+  # `:hook` compiles in Surface to phx-hook="#{inspect(module)}#name" (bare :hook = "default"), with the module known (from the scan), emit the EXACT registered name so existing collected hooks keep working
+  defp attr({":hook", value, ameta}, _tag_meta, %{ctx: %{module: module}} = state)
+       when is_binary(module) do
+    case value do
+      nil ->
+        state
+        |> region(attr_name_span(ameta), ~s(phx-hook="#{module}#default"))
+        |> hook_info(ameta, "#{module}#default")
+
+      {:string, name, smeta} ->
+        state
+        |> region(attr_name_span(ameta), "phx-hook")
+        |> region({{smeta.line, smeta.column}, {smeta.line_end, smeta.column_end}}, "#{module}##{name}")
+        |> hook_info(ameta, "#{module}##{name}")
+
+      _expr ->
+        hook_flag(state, value, ameta)
+    end
+  end
+
   defp attr({":hook", value, ameta}, _tag_meta, state) do
-    state
-    |> region(attr_name_span(ameta), "phx-hook")
-    |> log(
-      :manual_required,
-      :hook,
-      ameta.line,
-      "hook usage converted to phx-hook#{inspect_value(value)} — verify hook registration (colocated hooks migration is manual in MVP)"
-    )
+    hook_flag(state, value, ameta)
   end
 
   defp attr({":on-" <> event, _value, ameta}, _tag_meta, state) do
     region(state, attr_name_span(ameta), "phx-#{event}")
   end
 
-  defp attr({":" <> _ = name, value, ameta}, tag_meta, state)
-       when name not in @passthrough_directives do
-    todo_pos = {tag_meta.line, tag_meta.column - 1}
+  # Surface's own directives — never Alpine binds, so alpine_bind must not
+  # rename them (they carry Surface semantics and need manual conversion)
+  @surface_directives ~w(:show :values :attrs :props :args)
 
-    state
-    |> region({{ameta.line, max(ameta.column - 1, 1)}, value_end(value, ameta)}, "")
-    |> region(
-      {todo_pos, todo_pos},
-      "<%!-- TODO [surface.eject]: removed unsupported directive #{name} --%>"
-    )
-    |> log(
-      :manual_required,
-      :unknown_directive,
-      ameta.line,
-      "unsupported directive #{name} removed"
-    )
+  defp attr({":" <> bare = name, value, ameta}, {tag_name, tag_meta}, state)
+       when name not in @passthrough_directives do
+    if alpine_bind?(state) and html_tag?(tag_name) and name not in @surface_directives do
+      state
+      |> region(attr_name_span(ameta), "x-bind:#{bare}")
+      |> log(
+        :info,
+        :alpine_bind,
+        ameta.line,
+        "#{name} → x-bind:#{bare} (Alpine bind shorthand; HEEx rejects leading-colon attrs)"
+      )
+    else
+      todo_pos = {tag_meta.line, tag_meta.column - 1}
+
+      state
+      |> region({{ameta.line, max(ameta.column - 1, 1)}, value_end(value, ameta)}, "")
+      |> region(
+        {todo_pos, todo_pos},
+        "<%!-- TODO [surface.eject]: removed unsupported directive #{name} --%>"
+      )
+      |> log(
+        :manual_required,
+        :unknown_directive,
+        ameta.line,
+        "unsupported directive #{name} removed"
+      )
+    end
   end
 
   defp attr({:root, {:tagged_expr, "...", _expr, marker_meta}, _ameta}, _tag_meta, state) do
@@ -288,23 +693,81 @@ defmodule SurfaceEject.Template do
   # Surface's comma-list attr sugar (`class={"a", "b": cond}`, :css_class / :list props) is NOT valid HEEx, the braces would parse as a tuple and render garbage. Flag rather than silently emit (rewrite to a `[...]`
   # list, keyword pairs as `cond && "class"`).
   defp attr({name, {:expr, expr, emeta}, _ameta}, _tag_meta, state) do
+    if MapSet.member?(state.handled_attrs, {emeta.line, emeta.column}) do
+      state
+    else
+      flag_comma_list(name, expr, emeta, state)
+    end
+  end
+
+  defp attr(_attr, _tag_meta, state), do: state
+
+  defp hook_info(state, ameta, name) do
+    log(
+      state,
+      :info,
+      :hook,
+      ameta.line,
+      "hook converted to phx-hook=\"#{name}\" (Surface's exact registered name — registration unchanged)"
+    )
+  end
+
+  defp hook_flag(state, value, ameta) do
+    state
+    |> region(attr_name_span(ameta), "phx-hook")
+    |> log(
+      :manual_required,
+      :hook,
+      ameta.line,
+      "hook usage converted to phx-hook#{inspect_value(value)} — verify hook name/registration (module unknown or {name, from: Mod} form)"
+    )
+  end
+
+  defp alpine_bind?(%{ctx: %{profile: %{alpine_bind: true}}}), do: true
+  defp alpine_bind?(_state), do: false
+
+  defp html_tag?(name), do: name =~ ~r/^[a-z]/ and not String.contains?(name, ".")
+
+  defp flag_comma_list(name, expr, emeta, state) do
     case Code.string_to_quoted("[#{expr}]") do
       {:ok, list} when is_list(list) and length(list) > 1 ->
-        log(
-          state,
-          :manual_required,
-          :attr_comma_list,
-          emeta.line,
-          "#{name}={#{expr}} uses Surface's comma-list sugar — invalid HEEx (parses as a tuple); " <>
-            "rewrite as a list: #{name}={[...]} with keyword pairs as `cond && \"class\"`"
-        )
+        helper = css_class_helper(state)
+
+        if helper && class_attr?(name) do
+          # `class={a, b, c: cond}` → `class={helper([a, b, c: cond])}` —
+          # valid HEEx, identical Surface :css_class semantics at runtime
+          expr_start = {emeta.line, emeta.column}
+          expr_end = {emeta.line_end, emeta.column_end}
+
+          state
+          |> region({expr_start, expr_start}, "#{helper}([")
+          |> region({expr_end, expr_end}, "])")
+          |> log(
+            :info,
+            :css_class_wrapped,
+            emeta.line,
+            "#{name} comma-list wrapped in #{helper}([...]) (Surface :css_class semantics)"
+          )
+        else
+          log(
+            state,
+            :manual_required,
+            :attr_comma_list,
+            emeta.line,
+            "#{name}={#{expr}} uses Surface's comma-list sugar — invalid HEEx (parses as a tuple); " <>
+              "rewrite as a list: #{name}={[...]} with keyword pairs as `cond && \"class\"`"
+          )
+        end
 
       _ ->
         state
     end
   end
 
-  defp attr(_attr, _tag_meta, state), do: state
+  defp class_attr?(name), do: name == "class" or String.ends_with?(name, "_class")
+
+  defp css_class_helper(%{ctx: %{profile: %{css_class_helper: helper}}}), do: helper
+  defp css_class_helper(_state), do: nil
 
   ## helpers
 

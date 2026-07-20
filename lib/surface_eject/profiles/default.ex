@@ -14,8 +14,43 @@ defmodule SurfaceEject.Profiles.Default do
       # module; the plain phx.new counterpart is :live_view
       web_macros: %{surface_live_view: :live_view},
       use_atom_map: %{surface_live_view: :live_view},
-      aliases: builtin_aliases()
+      aliases: builtin_aliases(),
+      builtin_components: builtin_components_core()
     }
+  end
+
+  @doc """
+  Form mappings onto phx.new-style core components: `<Form>` → `<.form>`, standalone input controls → `<.input type=...>`, `<Label>` → `<.label>`. Cluster components (`Field`, `ErrorTag`, `Inputs`, …) are deliberately absent as they communicate via Surface context and need the structural collapse (Tier 2), so they stay flagged.
+  """
+  def builtin_components_core do
+    inputs = %{
+      "TextInput" => "text",
+      "TextArea" => "textarea",
+      "NumberInput" => "number",
+      "EmailInput" => "email",
+      "PasswordInput" => "password",
+      "HiddenInput" => "hidden",
+      "Checkbox" => "checkbox",
+      "RadioButton" => "radio",
+      "Select" => "select",
+      "DateInput" => "date",
+      "TimeInput" => "time",
+      "DateTimeLocalInput" => "datetime-local",
+      "ColorInput" => "color",
+      "RangeInput" => "range",
+      "SearchInput" => "search",
+      "TelephoneInput" => "tel",
+      "UrlInput" => "url",
+      "FileInput" => "file"
+    }
+
+    Map.new(inputs, fn {name, type} -> {"Surface.Components.Form.#{name}", {:input, type}} end)
+    |> Map.merge(%{
+      "Surface.Components.Form" => :form,
+      "Surface.Components.Form.Label" => {:rename, "label"},
+      # plain :get links only, method/label/event props flag instead
+      "Surface.Components.Link" => :link
+    })
   end
 
   @doc """

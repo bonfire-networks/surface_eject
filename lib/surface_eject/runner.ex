@@ -122,16 +122,17 @@ defmodule SurfaceEject.Runner do
   end
 
   defp ctx_for(path, scan, type_map, profile) do
-    file_aliases =
+    {file_aliases, module} =
       case scan do
-        %{aliases: aliases} -> aliases
-        _ -> %{}
+        %{aliases: aliases, module: module} -> {aliases, module}
+        _ -> {%{}, nil}
       end
 
     %Context{
       profile: profile,
       type_map: type_map,
       aliases: file_aliases,
+      module: module,
       file: path
     }
   end

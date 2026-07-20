@@ -84,9 +84,38 @@ defmodule SurfaceEject.TemplateTransformsTest do
                ~S(<div phx-window-keydown="k">x</div>)
     end
 
-    test ":hook becomes phx-hook and is flagged" do
+    test ":hook without a known module renames and flags (can't compute the registered name)" do
       assert convert(~S(<div :hook="Name">x</div>)) == ~S(<div phx-hook="Name">x</div>)
-      assert Enum.any?(convert_logs(~S(<div :hook="Name">x</div>)), &(&1.category == :hook))
+
+      assert Enum.any?(
+               convert_logs(~S(<div :hook="Name">x</div>)),
+               &(&1.category == :hook and &1.severity == :manual_required)
+             )
+    end
+
+    test ":hook with a known module emits Surface's exact registered name (Module#hook)" do
+      ctx = %SurfaceEject.Context{
+        profile: SurfaceEject.Profiles.Bonfire.profile(),
+        module: "My.LazyImage"
+      }
+
+      # named hook
+      {out, logs} = SurfaceEject.Template.convert(~S(<div :hook="Name">x</div>), ctx)
+      assert out == ~S(<div phx-hook="My.LazyImage#Name">x</div>)
+      refute Enum.any?(logs, &(&1.severity == :manual_required))
+      assert Enum.any?(logs, &(&1.category == :hook and &1.severity == :info))
+
+      # bare :hook = the "default" export
+      {out, _} = SurfaceEject.Template.convert(~S(<div :hook>x</div>), ctx)
+      assert out == ~S(<div phx-hook="My.LazyImage#default">x</div>)
+
+      # expr form ({name, from: Mod}) stays flagged
+      {out, logs} =
+        SurfaceEject.Template.convert(~S(<div :hook={"X", from: Other.Mod}>x</div>), ctx)
+
+      assert out =~ "phx-hook"
+      assert Enum.any?(logs, &(&1.severity == :manual_required))
+      _ = out
     end
 
     test "root spread {...expr} becomes {expr}" do
@@ -96,6 +125,26 @@ defmodule SurfaceEject.TemplateTransformsTest do
     test ":if/:for/:let attrs pass through (valid HEEx)" do
       src = ~S(<div :if={@x} :for={y <- @ys}>{y}</div>)
       assert convert(src) == src
+    end
+
+    test "alpine_bind: :attr on an HTML tag becomes x-bind:attr (Alpine shorthand longhand)" do
+      # leading-colon attrs are rejected by HEEx on tags; x-bind: is the
+      # identical Alpine longhand
+      ctx = %SurfaceEject.Context{profile: SurfaceEject.Profiles.Bonfire.profile()}
+
+      {out, logs} = SurfaceEject.Template.convert(~S(<div :class="open && 'a'">y</div>), ctx)
+      assert out == ~S(<div x-bind:class="open && 'a'">y</div>)
+      assert Enum.any?(logs, &(&1.category == :alpine_bind))
+
+      {out, _} =
+        SurfaceEject.Template.convert(~S(<button :aria-expanded="open">y</button>), ctx)
+
+      assert out == ~S(<button x-bind:aria-expanded="open">y</button>)
+
+      # on a COMPONENT the attr is not a DOM bind — keep remove+flag
+      {out, logs} = SurfaceEject.Template.convert(~S(<Card :class="x" />), ctx)
+      refute out =~ ~S(<Card :class)
+      assert Enum.any?(logs, &(&1.category == :unknown_directive))
     end
 
     test "unknown directive is removed with a TODO comment and flagged" do

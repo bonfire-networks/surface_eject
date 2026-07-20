@@ -53,8 +53,27 @@ defmodule SurfaceEject.CLITest do
   end
 
   @tag :tmp_dir
+  test "dry run prints the report; --report saves it (the only dry-run write)", %{
+    tmp_dir: tmp,
+    lib: lib
+  } do
+    output = capture_io(fn -> CLI.main(["--path", lib]) end)
+    assert output =~ "# Surface ejection report"
+
+    report_path = Path.join(tmp, "census.md")
+    capture_io(fn -> CLI.main(["--path", lib, "--report", report_path]) end)
+    assert File.read!(report_path) =~ "# Surface ejection report"
+    refute File.exists?(Path.join(lib, ".surface_eject_status.json"))
+  end
+
+  @tag :tmp_dir
   test "--apply converts and renames", %{lib: lib} do
     capture_io(fn -> CLI.main(["--path", lib, "--apply"]) end)
+
+    # the apply-review artifacts
+    assert File.read!(Path.join(lib, "SURFACE_EJECT_REPORT.md")) =~ "# Surface ejection report"
+    status = Jason.decode!(File.read!(Path.join(lib, ".surface_eject_status.json")))
+    assert status["files"]["#{lib}/page.sface"]["action"] == "move"
 
     refute File.exists?(Path.join(lib, "page.sface"))
     heex = File.read!(Path.join(lib, "page.heex"))

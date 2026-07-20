@@ -48,11 +48,15 @@ defmodule SurfaceEject.Template.CallSites do
 
   @doc """
   Resolves a tag name to a rewrite action:
-  `:skip | :render_suffix | {:live_component, full} | :surface_builtin | :unknown_component`.
+  `:skip | :render_suffix | {:live_component, full} | {:surface_builtin, full} | :unknown_component`.
   """
   def resolve(name, ctx) do
     cond do
       not String.match?(name, ~r/^[A-Z]/) ->
+        :skip
+
+      # a dotted tag ending in a lowercase segment (<Iconify.iconify>, <Phoenix.Component.link>) is a remote function-component call, already valid HEEx which Surface supported natively
+      name |> String.split(".") |> List.last() |> String.match?(~r/^[a-z]/) ->
         :skip
 
       dynamic_dispatch(ctx)[name] == :suffix_render ->
@@ -62,7 +66,7 @@ defmodule SurfaceEject.Template.CallSites do
         resolved = resolve_alias(name, aliases(ctx))
 
         cond do
-          String.starts_with?(resolved, "Surface.Components.") -> :surface_builtin
+          String.starts_with?(resolved, "Surface.Components.") -> {:surface_builtin, resolved}
           type(ctx, resolved) == :function_component -> :render_suffix
           type(ctx, resolved) == :live_component -> {:live_component, resolved}
           true -> :unknown_component

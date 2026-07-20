@@ -13,7 +13,25 @@ defmodule SurfaceEject.CLI do
   `--scan-path` (repeatable) adds trees that are SCANNED for component types/aliases but never converted — convert one app of a multi-app project while resolving components defined in the others. `--exclude` (repeatable) adds path segments to skip on top of the defaults (deps, _build, node_modules).
   """
 
-  alias SurfaceEject.{Files, Profile, Runner}
+  alias SurfaceEject.{Files, Profile, Reporter, Runner}
+
+  def main(["hooks-index" | argv]) do
+    {opts, _, invalid} =
+      OptionParser.parse(argv, strict: [path: :keep, out: :string])
+
+    if invalid != [], do: raise(ArgumentError, "invalid options: #{inspect(invalid)}")
+
+    roots = Keyword.get_values(opts, :path)
+    out = opts[:out]
+
+    if roots == [] or out == nil,
+      do: raise(ArgumentError, "hooks-index requires --path (repeatable) and --out")
+
+    {:ok, %{copied: copied, skipped: skipped}} = SurfaceEject.HooksIndex.generate(roots, out)
+
+    IO.puts("#{length(copied)} hooks collected into #{out}/index.js")
+    Enum.each(skipped, &IO.puts("skipped (no sibling module): #{&1}"))
+  end
 
   def main(argv) do
     {opts, _, invalid} =
@@ -25,7 +43,8 @@ defmodule SurfaceEject.CLI do
           exclude: :keep,
           apply: :boolean,
           verbose: :boolean,
-          debug: :boolean
+          debug: :boolean,
+          report: :string
         ]
       )
 
@@ -62,38 +81,37 @@ defmodule SurfaceEject.CLI do
         progress: progress
       )
 
-    report(actions, logs, opts[:verbose] || false)
+    md = Reporter.markdown(actions, logs)
+    IO.puts(md)
+    if opts[:verbose], do: verbose_logs(logs)
 
-    if apply?, do: apply_actions(actions), else: IO.puts("\nDry run — nothing written (pass --apply to convert).")
+    # dry runs write NOTHING unless a report path is explicitly requested
+    if report_path = opts[:report], do: File.write!(report_path, md)
+
+    if apply? do
+      apply_actions(actions)
+      # the apply-review artifacts, meant to be read alongside `git diff`
+      unless opts[:report], do: File.write!(Path.join(path, "SURFACE_EJECT_REPORT.md"), md)
+
+      File.write!(
+        Path.join(path, ".surface_eject_status.json"),
+        Jason.encode!(Reporter.status(actions), pretty: true)
+      )
+    else
+      IO.puts("\nDry run — nothing written (pass --apply to convert).")
+    end
+  end
+
+  defp verbose_logs(logs) do
+    IO.puts("\n## All log lines\n")
+
+    Enum.each(logs, fn log ->
+      IO.puts("  [#{log.severity}] #{log.file}:#{log.line || "-"} #{log.message}")
+    end)
   end
 
   # liveness/progress goes to stderr so stdout stays a clean report
   defp status(message), do: IO.puts(:stderr, message)
-
-  defp report(actions, logs, verbose?) do
-    changed =
-      for {file, action} <- Enum.sort(actions), action != :unchanged do
-        case action do
-          {:write, _content, _logs} -> IO.puts("convert  #{file}")
-          {:move, new_path, _content, _logs} -> IO.puts("convert  #{file} → #{new_path}")
-          {:error, message, _logs} -> IO.puts("ERROR    #{message}")
-        end
-
-        file
-      end
-
-    IO.puts("\n#{map_size(actions)} files planned, #{length(changed)} with changes")
-
-    logs
-    |> Enum.frequencies_by(& &1.severity)
-    |> Enum.each(fn {severity, count} -> IO.puts("  #{severity}: #{count}") end)
-
-    if verbose? do
-      Enum.each(logs, fn log ->
-        IO.puts("  [#{log.severity}] #{log.file}:#{log.line || "-"} #{log.message}")
-      end)
-    end
-  end
 
   defp apply_actions(actions) do
     Enum.each(actions, fn

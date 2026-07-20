@@ -11,6 +11,8 @@ defmodule SurfaceEject.Context do
   defstruct profile: nil,
             type_map: %{},
             aliases: %{},
+            # the module being converted (from the scan; for .sface files the colocated sibling's), lets :hook conversion emit Surface's exact registered hook names
+            module: nil,
             file: "nofile",
             ext: ".sface",
             opts: []

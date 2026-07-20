@@ -10,7 +10,7 @@
     >
       <div class="flex flex-1 items-start gap-3">
         <div class="grid size-10 shrink-0 place-items-center rounded-lg bg-base-content/5">
-          <#Icon iconify="ph:archive-duotone" class="size-5 text-muted" />
+          <Iconify.iconify icon="ph:archive-duotone" class="size-5 text-muted" />
         </div>
         <div class="flex-1">
           <div class="font-medium text-base-content">{l("This group is archived")}</div>
@@ -27,7 +27,7 @@
           data-confirm={l("Restore this group and bring it back online?")}
           class="btn btn-primary btn-sm shrink-0 gap-2 normal-case sm:self-center"
         >
-          <#Icon iconify="ph:arrow-counter-clockwise" class="size-4" />
+          <Iconify.iconify icon="ph:arrow-counter-clockwise" class="size-4" />
           {l("Unarchive")}
         </button>
       <% end %>
@@ -110,7 +110,7 @@
                   aria-label={l("Go back to the previous page")}
                   class="btn z-50 btn-sm btn-circle"
                 >
-                  <#Icon iconify="ph:arrow-left" class="w-5 h-5" />
+                  <Iconify.iconify icon="ph:arrow-left" class="w-5 h-5" />
                 </LinkLive>
                 <div class="flex items-center flex-1 w-full flex-1">
                   <span class="max-w-[250px] lg:max-w-[600px] font-medium text-base-content truncate text-ellipsis">

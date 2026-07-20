@@ -51,9 +51,17 @@ defmodule Mix.Tasks.Surface.Eject do
     {convert_paths, scan_only_paths} =
       SurfaceEject.Files.partition(Map.keys(contents), path, scan_paths, list_opt(opts, :exclude))
 
-    {actions, _logs} =
+    {actions, logs} =
       Runner.plan(Map.take(contents, convert_paths), profile,
         scan_files: Map.take(contents, scan_only_paths)
+      )
+
+    igniter =
+      Igniter.create_new_file(
+        igniter,
+        Path.join(path, "SURFACE_EJECT_REPORT.md"),
+        SurfaceEject.Reporter.markdown(actions, logs),
+        on_exists: :overwrite
       )
 
     Enum.reduce(actions, igniter, fn

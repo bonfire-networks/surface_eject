@@ -17,12 +17,12 @@ defmodule SurfaceEject.Files do
   @doc """
   Lists convertible files under `root` with exclusions PRUNED DURING traversal, a glob that lists first and filters after can spend minutes walking `node_modules`/`deps` trees. Dot-directories and symlinked directories are skipped (symlinks can cycle).
   """
-  def list_files(root, extra_excludes) do
+  def list_files(root, extra_excludes, extensions \\ [".ex", ".sface"]) do
     excludes = @default_excludes ++ extra_excludes
-    walk(root, excludes, [])
+    walk(root, excludes, extensions, [])
   end
 
-  defp walk(dir, excludes, acc) do
+  defp walk(dir, excludes, extensions, acc) do
     case File.ls(dir) do
       {:ok, entries} ->
         Enum.reduce(entries, acc, fn entry, acc ->
@@ -30,8 +30,8 @@ defmodule SurfaceEject.Files do
 
           cond do
             String.starts_with?(entry, ".") or entry in excludes -> acc
-            dir?(full) -> walk(full, excludes, acc)
-            Path.extname(entry) in [".ex", ".sface"] -> [full | acc]
+            dir?(full) -> walk(full, excludes, extensions, acc)
+            Path.extname(entry) in extensions -> [full | acc]
             true -> acc
           end
         end)

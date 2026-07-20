@@ -1,12 +1,12 @@
 <div class="contents">
-  <Form
+  <.form
     for={%{}}
     as={:category}
     id="new_group_form"
     class="flex flex-col w-full gap-4"
-    submit="Bonfire.UI.Groups:new"
+    phx-submit="Bonfire.UI.Groups:new"
     action="Bonfire.UI.Groups:new"
-    opts={autocomplete: "off"}
+    {[autocomplete: "off"]}
   >
     <%!-- Intent framing --%>
     <p class="-mt-3 text-sm leading-relaxed text-muted">
@@ -56,9 +56,9 @@
 
     <%!-- Primary action --%>
     <button type="submit" class="btn btn-primary w-full normal-case">
-      <#Icon iconify="ph:check" class="w-4 h-4 mr-1" />{l("Create group")}
+      <Iconify.iconify icon="ph:check" class="w-4 h-4 mr-1" />{l("Create group")}
     </button>
 
     <input type="hidden" name="context_id" value={id(@parent)}>
-  </Form>
+  </.form>
 </div>

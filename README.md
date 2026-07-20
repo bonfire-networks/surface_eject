@@ -9,13 +9,17 @@ Surface pioneered much of what became LiveView's component model (`attr`/`slot`/
 **Templates** (`.sface` and inline `~F` sigils) are tokenized with **Surface's own tokenizer** and rewritten by position-driven source splicing, untouched source survives byte-for-byte, so diffs stay reviewable even across hundreds of files. Transforms:
 
 - `{#if}/{#elseif}/{#else}/{#unless}` → `<%= if %>` forms (elseif desugars to nested ifs); `{#case}/{#match}` → `<%= case %>` clauses; `{#for}` → `<%= for %>`, with for-else wrapped in an `Enum.empty?` guard (non-assign subjects flagged for double evaluation)
-- `{!-- comments --}` → `<%!-- comments --%>`; `{...@spread}` → `{@spread}`; `:on-*` → `phx-*`; `:hook` → `phx-hook` (flagged for hook-registration review)
+- `{!-- comments --}` → `<%!-- comments --%>`; `{...@spread}` → `{@spread}`; `:on-*` → `phx-*`; `:hook` → `phx-hook` with Surface's exact registered name (`Module.Name#hook`, bare `:hook` = `#default`) so existing collected hooks keep working
 - `<#slot>` element forms → `{render_slot(...)}`, with fallback children becoming an if/else wrap
 - `:if=`/`:for=`/`:let=` pass through unchanged — they're already valid HEEx
-- Component call sites (using a project-wide scan of component types and aliases): function components → `<Module.render ...>` (modules keep their `render/1`), live components → `<.live_component module={Module} ...>` (callers passing named slot entries are flagged — `<.live_component>` can't receive them), dynamic-dispatch wrappers get a configurable suffix, Surface built-ins are flagged
+- Component call sites (using a project-wide scan of component types and aliases): function components → `<Module.render ...>` (modules keep their `render/1`), live components → `<.live_component module={Module} ...>`, dynamic-dispatch wrappers get a configurable suffix. Callers passing named slot entries to a live component (`<.live_component>` can't receive them) rename to a function-component entry point when the profile maps one (`live_component_slot_entrypoints: %{"My.ModalLive" => "open_modal"}`, a one-liner on the module that forwards assigns, slots included, into `<.live_component>`); unmapped ones are flagged
 - Unknown directives are removed with a TODO comment and a `:manual_required` flag, never silently emitted as invalid HEEx
 
-- Surface's comma-list attr sugar (`class={"card", "rounded": @rounded}` on `:css_class`/`:list` props) is flagged `:manual_required` — in HEEx those braces parse as a *tuple* and render garbage, so it must become a real list (keyword pairs as `cond && "class"`)
+- Surface's comma-list class sugar (`class={"card", "rounded": @rounded}`) is invalid HEEx (parses as a *tuple*) which wraps into a runtime helper with identical `:css_class` semantics when the profile sets `css_class_helper` (`class={css_class(["card", "rounded": @rounded])}`; applies to `class` and `*_class` attrs); without a helper, or on non-class attrs, it's flagged `:manual_required`. `SurfaceEject.Runtime.css_class/1` ships as the reference implementation. Vendor it (copy the ~20 lines into a module your templates import, since surface_eject is normally dev-only) or point the profile at it directly if you keep the dep at runtime
+- Surface **contexts** need no conversion at all when paired with [surf_context](https://github.com/bonfire-networks/surf_context): it re-threads the `__context__` assign through every component call site at compile time, so `@__context__` reads in converted templates keep working verbatim. Add `use SurfContext` to your web macros and the ejected code never notices Surface's context machinery left
+- Alpine's bind shorthand (`:class=`, `:aria-*=` — HEEx rejects leading-colon attrs, Surface passed them through) renames to the identical `x-bind:` longhand on HTML tags when the profile sets `alpine_bind: true`; Alpine's `@event=` shorthand is already valid HEEx and passes through
+- **Built-in components** (profile `builtin_components`): `<Form>` → `<.form>` (`submit`/`change` → `phx-submit`/`phx-change`, `opts={...}` → a root spread), input controls → `<.input type="...">` (`selected` → `value`), `<Label>` → `<.label>`, `<Link>` → `<.link>` (`to` → `href`; `method`/`label`/event props carry Surface semantics and flag instead). **`<Field>` converts structure-preservingly**: Surface's `Field` rendered as `<div class=...>` and passed its `name` to children via context, so the converter creates a `<div>` and gives child controls an explicit `field={form[:name]}`, `<ErrorTag>` is dropped (`.input` renders errors), and the enclosing `<.form>` gains `:let={form}` (an existing simple `:let` var is reused). Wrapper markup, `Field` classes, and custom components inside all survive untouched. `<Inputs for={:assoc}>` converts to Phoenix's own `<.inputs_for :let={nested_form} field={form[:assoc]}>` (Surface's `Inputs` was already a wrapper around it), with Fields inside binding the nested form. Fields/Inputs with no in-template enclosing `<Form>` (component boundaries) and `<FieldContext>` stay flagged
+- **MacroComponents** (`<#Tag>` — invalid HEEx): mapped ones (profile `macro_components`) convert with static attr rewrites (e.g. uses of iconify_ex's `<#Icon>` → `<Iconify.iconify icon=...>`, `solid="user"` → `icon="heroicons:user-solid"`); unmapped ones are flagged instead of passing through as broken output
 
 **Elixir files**: `~F` → `~H` (bodies converted through the template pass), direct `use Surface.Component/LiveComponent/LiveView` → the `Phoenix` counterpart, and (mode-dependent) `prop` → `attr` with type mapping, `slot default` → `slot :inner_block` (`arg:` dropped; those semantics live in the caller's `:let`), `@doc` lines preceding a declaration folded into its `doc:` option (Surface's macros consumed `@doc`; Phoenix's don't — left alone they'd stack up and wrongly document `render/1`), `data` flagged. Declaration conversion only happens for declaration groups adjacent to a 1-arity def (dangling `attr` lines don't compile); everything else is flagged, not guessed.
 
@@ -51,21 +55,27 @@ mix surface.eject --profile bonfire --path lib --dry-run   # review the diff fir
 mix surface.eject --profile bonfire --path lib             # apply
 ```
 
-Igniter-powered: all changes compose into one reviewable diff with confirmation; `.sface` files are renamed to `.heex` in the same pass.
+Igniter-powered: all changes compose into one reviewable diff with confirmation; `.sface` files are renamed to `.heex` in the same pass, and a `SURFACE_EJECT_REPORT.md` is added to the diff.
 
 ### As an escript (no dependency on the target)
 
 ```sh
 mix escript.build
-./surface_eject --profile bonfire --path ../my_app/lib            # dry run (default): read-only, prints the plan
-./surface_eject --profile bonfire --path ../my_app/lib --apply    # write + rename; review with git diff
+./surface_eject --profile bonfire --path ../my_app/lib            # dry run (default): read-only, prints the report
+./surface_eject --profile bonfire --path ../my_app/lib --apply    # write + rename; review with git diff + SURFACE_EJECT_REPORT.md
 ```
+
+The **report** (`SurfaceEject.Reporter`): errors and manual-review items with locations up top, info as counts, changed-file list — the artifact to read alongside `git diff` when applying. The dry run prints it to stdout (still writing nothing); `--report PATH` saves it even on a dry run; `--apply` writes it plus a per-file `.surface_eject_status.json` into the target for tracking incremental migration.
 
 Both frontends are thin shells over the same `SurfaceEject.Runner.plan/2` pipeline, which is pure source-text transformation (the project scan parses sources, it never loads the target's modules), so the escript doesn't compile or even load the target project, and a dry run writes nothing. One malformed file does not kill a run: it's flagged as an error, left unchanged, and the rest of the plan proceeds.
 
 ### File selection (both frontends)
 
 Everything matching `<path>/**/*.{ex,sface}` is planned; `.heex` output is never re-picked-up, and re-running on converted files is a byte-exact no-op. `deps`, `_build`, and `node_modules` segments are always excluded; `--exclude <segment>` (repeatable) adds more. `--scan-path <root>` (repeatable) adds trees that are *scanned* for component types/aliases but not converted, so you can convert a single app of an umbrella or poncho project while still resolving components defined in the others (`--path extensions/foo --scan-path extensions`).
+
+### Colocated hooks (`hooks-index` subcommand)
+
+Surface's compiler collected colocated `*.hooks.js` files into a namespaced `hooks/index.js` — from Surface modules only, so converted modules silently drop out. `./surface_eject hooks-index --path extensions --out assets/hooks` regenerates the same artifact (byte-compatible format, module-named copies) from a plain file glob, keeping hooks working for converted and unconverted modules throughout the migration. Run it after any Surface compile. Migrating to LiveView's colocated `<script :type={ColocatedHook}>` can then happen per component, later, optionally.
 
 ### Which frontend?
 
