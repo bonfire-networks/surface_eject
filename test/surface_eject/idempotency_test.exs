@@ -13,10 +13,21 @@ defmodule SurfaceEject.IdempotencyTest do
 
   @fixtures Path.expand("../fixtures", __DIR__)
 
-  test "compat-mode converted module converts to itself" do
-    converted = File.read!(Path.join(@fixtures, "link_inline/expected/link_live.ex"))
+  test "native-mode converted module converts to itself" do
+    path = Path.join(@fixtures, "link_inline/expected/link_live.ex")
+    converted = File.read!(path)
 
-    {out, logs} = Ex.convert(converted, %Context{profile: Profiles.Bonfire.profile()})
+    profile = Profiles.Bonfire.profile()
+    scan = SurfaceEject.Scan.scan_source(converted, %Context{profile: profile})
+
+    ctx = %Context{
+      profile: profile,
+      module: scan.module,
+      type_map: %{scan.module => scan.type},
+      file: path
+    }
+
+    {out, logs} = Ex.convert(converted, ctx)
 
     assert out == converted
     assert logs == []

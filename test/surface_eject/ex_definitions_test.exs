@@ -140,5 +140,215 @@ defmodule SurfaceEject.ExDefinitionsTest do
       refute out =~ ":stateless_component"
       assert Enum.any?(convert_logs(source, bonfire), &(&1.category == :use_atom))
     end
+
+    test "use-atom swap: surface_live_view_child → live_view_child (nested-LV plain analogue)" do
+      source = "defmodule A do\n  use My.Web, :surface_live_view_child\nend\n"
+      bonfire = %Context{profile: Profiles.Bonfire.profile()}
+
+      assert convert(source, bonfire) =~ "use My.Web, :live_view_child"
+    end
+  end
+
+  describe ":native declarations (attr where possible, live_attr elsewhere)" do
+    defp native_ctx(module, kind, extra \\ []) do
+      profile = %{
+        Profiles.Bonfire.profile()
+        | declarations: :native,
+          live_attr: Keyword.get(extra, :live_attr, true),
+          embedded_render_delegate: "render_template"
+      }
+
+      %Context{profile: profile, module: module, type_map: %{module => kind}}
+    end
+
+    test "sface-colocated function component: native attr/slot + delegating render; data → live_attr" do
+      source = """
+      defmodule My.CardLive do
+        use My.Web, :stateless_component
+
+        prop label, :string, default: "hi"
+        prop klass, :css_class
+
+        slot default
+
+        data computed, :any, default: nil
+      end
+      """
+
+      out = convert(source, native_ctx("My.CardLive", :function_component))
+
+      assert out =~ ~s|attr :label, :string, default: "hi"|
+      assert out =~ "attr :klass, :any"
+      assert out =~ "slot :inner_block"
+      # data stays out of the public attr API, original type kept
+      assert out =~ "live_attr :computed, :any, default: nil"
+      # the def the attrs bind to (before web.ex's embed hook runs)
+      assert out =~ "def render(assigns), do: render_template(assigns)"
+      refute out =~ "prop "
+    end
+
+    test "inline-render function component: attr adjacency as before, NO delegate emitted" do
+      source = """
+      defmodule My.Inline do
+        use Surface.Component
+
+        prop a, :string
+
+        def render(assigns), do: nil
+      end
+      """
+
+      out = convert(source, native_ctx("My.Inline", :function_component))
+
+      assert out =~ "attr :a, :string"
+      refute out =~ "render_template"
+    end
+
+    test "live component: prop → live_attr (reapply), data → internal, slot deleted" do
+      source = """
+      defmodule My.Modal do
+        use My.Web, :stateful_component
+
+        prop title, :string, default: "t", required: false
+
+        data expanded, :boolean, default: false
+
+        slot side
+
+        def update(assigns, socket), do: {:ok, socket}
+      end
+      """
+
+      out = convert(source, native_ctx("My.Modal", :live_component))
+
+      assert out =~ ~s|live_attr :title, :string, default: "t", required: false|
+      assert out =~ "live_attr :expanded, :boolean, default: false, internal: true"
+      refute out =~ "slot side"
+      refute out =~ "prop "
+      refute out =~ ~r/^\s*data /m
+    end
+
+    test "live view: data → live_attr, prop deleted" do
+      source = """
+      defmodule My.View do
+        use My.Web, :surface_live_view
+
+        prop ignored, :any
+
+        data page_title, :string, default: "home"
+      end
+      """
+
+      out = convert(source, native_ctx("My.View", :live_view))
+
+      assert out =~ ~s|live_attr :page_title, :string, default: "home"|
+      refute out =~ "prop ignored"
+    end
+
+    test "helper defs (any arity) don't suppress the delegate — attrs must bind render/1" do
+      source = """
+      defmodule My.CardLive do
+        use My.Web, :stateless_component
+
+        prop label, :string, default: "hi"
+
+        def smart_input_module, do: [:article]
+
+        defp helper(x), do: x
+      end
+      """
+
+      out = convert(source, native_ctx("My.CardLive", :function_component))
+
+      # delegate right after the declarations, BEFORE the helpers
+      assert out =~
+               ~r/attr :label.*?\n\s*def render\(assigns\), do: render_template\(assigns\)\s*\n\s*def smart_input_module/s
+    end
+
+    test "profile call_renames: render_sface() calls become render_template()" do
+      source = """
+      defmodule My.CardLive do
+        use My.Web, :stateless_component
+
+        prop label, :string, default: "hi"
+
+        def render(assigns) do
+          assigns
+          |> assign(:x, 1)
+          |> render_sface()
+        end
+      end
+      """
+
+      out = convert(source, native_ctx("My.CardLive", :function_component))
+
+      assert out =~ "|> render_template()"
+      refute out =~ "render_sface"
+    end
+
+    test "non-adjacent fn-comp props (macro between decls and render) fall back to live_attr" do
+      source = """
+      defmodule My.NavLive do
+        use My.Web, :stateless_component
+
+        prop page, :string, default: nil
+
+        declare_nav_component("Links")
+
+        def render(assigns), do: nil
+      end
+      """
+
+      out = convert(source, native_ctx("My.NavLive", :function_component))
+
+      # attr would bind declare_nav_component's generated def — live_attr
+      # is position-independent
+      assert out =~ "live_attr :page, :string, default: nil"
+      # \b: a bare "attr :page" (live_attr contains the substring)
+      refute out =~ ~r/\battr :page/
+      refute out =~ "render_template"
+    end
+
+    test "attr default conflicting with the declared type falls back to :any (Surface never validated)" do
+      source = """
+      defmodule My.Inline do
+        use Surface.Component
+
+        prop modal_id, :string, default: :sidebar_composer
+
+        def render(assigns), do: nil
+      end
+      """
+
+      ctx = native_ctx("My.Inline", :function_component)
+      out = convert(source, ctx)
+
+      assert out =~ "attr :modal_id, :any, default: :sidebar_composer"
+
+      assert Enum.any?(
+               convert_logs(source, ctx),
+               &(&1.category == :attr_type_conflict and &1.severity == :warning)
+             )
+    end
+
+    test "live_attr: false emits the translation COMMENTED (file still compiles)" do
+      source = """
+      defmodule My.Modal do
+        use Surface.LiveComponent
+
+        prop title, :string, default: "t"
+      end
+      """
+
+      out = convert(source, native_ctx("My.Modal", :live_component, live_attr: false))
+
+      assert out =~ ~s|# live_attr :title, :string, default: "t"|
+      refute out =~ ~r/^\s*prop /m
+
+      assert Enum.any?(
+               convert_logs(source, native_ctx("My.Modal", :live_component, live_attr: false)),
+               &(&1.severity == :manual_required and &1.category == :live_attr_commented)
+             )
+    end
   end
 end

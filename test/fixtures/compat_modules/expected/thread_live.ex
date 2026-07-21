@@ -10,46 +10,46 @@ defmodule Bonfire.UI.Social.ThreadLive do
   alias Bonfire.Social.Threads.LiveHandler
   # import Bonfire.Me.Integration
 
-  prop replies, :any, default: nil
-  prop threaded_replies, :any, default: nil
-  prop page_info, :any, default: nil
+  live_attr :replies, :any, default: nil
+  live_attr :threaded_replies, :any, default: nil
+  live_attr :page_info, :any, default: nil
 
-  prop activity, :any, default: nil
-  prop object, :any, default: nil
-  prop thread_id, :any, default: nil
-  prop highlight_reply_id, :any, default: nil
-  prop reply_to_id, :any, default: nil
-  prop include_path_ids, :any, default: nil
-  prop depth_loaded, :any, default: nil
+  live_attr :activity, :any, default: nil
+  live_attr :object, :any, default: nil
+  live_attr :thread_id, :any, default: nil
+  live_attr :highlight_reply_id, :any, default: nil
+  live_attr :reply_to_id, :any, default: nil
+  live_attr :include_path_ids, :any, default: nil
+  live_attr :depth_loaded, :any, default: nil
 
-  prop main_object_component_id, :any, default: nil
+  live_attr :main_object_component_id, :any, default: nil
   # prop page, :any, default: "thread"
-  prop feed_id, :any, default: nil
+  live_attr :feed_id, :any, default: nil
   # prop create_object_type, :any, default: nil
   # prop to_boundaries, :any, default: nil
   # prop to_circles, :list, default: []
-  prop exclude_circles, :list, default: []
-  prop current_url, :string, default: nil
+  live_attr :exclude_circles, :list, default: []
+  live_attr :current_url, :string, default: nil
   # prop smart_input_opts, :map, default: %{}
-  prop participants, :any, default: nil
+  live_attr :participants, :any, default: nil
 
-  prop thread_mode, :any, default: nil
-  prop sort_by, :any, default: nil
-  prop sort_order, :any, default: false
-  prop showing_within, :atom, default: :thread
-  prop hide_thread_stats, :boolean, default: false
-  prop loading, :boolean, default: false
+  live_attr :thread_mode, :any, default: nil
+  live_attr :sort_by, :any, default: nil
+  live_attr :sort_order, :any, default: false
+  live_attr :showing_within, :atom, default: :thread
+  live_attr :hide_thread_stats, :boolean, default: false
+  live_attr :loading, :boolean, default: false
 
-  prop activity_inception, :any, default: nil
+  live_attr :activity_inception, :any, default: nil
 
-  prop reply_count, :any, default: nil
-  prop thread_boost_count, :any, default: nil
-  prop participant_count, :any, default: nil
-  prop last_reply_id, :any, default: nil
+  live_attr :reply_count, :any, default: nil
+  live_attr :thread_boost_count, :any, default: nil
+  live_attr :participant_count, :any, default: nil
+  live_attr :last_reply_id, :any, default: nil
 
-  prop activity_preloads, :tuple, default: {nil, nil}
+  live_attr :activity_preloads, :tuple, default: {nil, nil}
 
-  data has_replies, :boolean, default: false
+  live_attr :has_replies, :boolean, default: false, internal: true
 
   def mount(socket) do
     {

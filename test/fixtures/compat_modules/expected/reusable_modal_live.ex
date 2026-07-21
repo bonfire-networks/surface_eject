@@ -35,72 +35,50 @@ defmodule Bonfire.UI.Common.ReusableModalLive do
     title: nil
   ]
 
-  @doc "The title of the modal. Only used if no title slot is passed."
-  prop title_text, :string, default: nil
+  live_attr :title_text, :string, default: nil, doc: "The title of the modal. Only used if no title slot is passed."
 
-  @doc "If the modal is a preview of an image, set this to true."
-  prop image_preview, :boolean, default: false
+  live_attr :image_preview, :boolean, default: false, doc: "If the modal is a preview of an image, set this to true."
 
-  @doc "The classes of the title of the modal"
-  prop title_class, :css_class, default: nil
+  live_attr :title_class, :css_class, default: nil, doc: "The classes of the title of the modal"
 
-  @doc "The classes of the modal."
-  prop modal_class, :css_class, default: ""
+  live_attr :modal_class, :css_class, default: "", doc: "The classes of the modal."
 
-  @doc "The classes of the modal wrapper."
-  prop wrapper_class, :css_class, default: nil
+  live_attr :wrapper_class, :css_class, default: nil, doc: "The classes of the modal wrapper."
 
-  @doc "The classes around the action/submit button(s) on the modal"
-  prop action_btns_wrapper_class, :css_class, default: nil
+  live_attr :action_btns_wrapper_class, :css_class, default: nil, doc: "The classes around the action/submit button(s) on the modal"
 
-  @doc "The classes of the close/cancel button on the modal. Only used if no close_btn slot is passed."
-  prop cancel_btn_class, :css_class, default: nil
+  live_attr :cancel_btn_class, :css_class, default: nil, doc: "The classes of the close/cancel button on the modal. Only used if no close_btn slot is passed."
 
-  prop cancel_label, :string, default: nil
+  live_attr :cancel_label, :string, default: nil
 
-  @doc "Force modal to be open"
-  prop show, :boolean, default: false
+  live_attr :show, :boolean, default: false, doc: "Force modal to be open"
 
   # prop no_form, :boolean, default: false
 
-  prop form_opts, :map, default: %{}
+  live_attr :form_opts, :map, default: %{}
 
-  @doc "Optional prop to hide the actions at the bottom of the modal"
-  prop no_actions, :boolean, default: false
+  live_attr :no_actions, :boolean, default: false, doc: "Optional prop to hide the actions at the bottom of the modal"
 
-  @doc "Optional prop to hide the header at the top of the modal"
-  prop no_header, :boolean, default: false
+  live_attr :no_header, :boolean, default: false, doc: "Optional prop to hide the header at the top of the modal"
 
-  prop no_backdrop, :boolean, default: false
-  prop overflow, :boolean, default: false
+  live_attr :no_backdrop, :boolean, default: false
+  live_attr :overflow, :boolean, default: false
 
-  @doc """
-  Additional assigns to pass on to the optional modal sub-component
-  """
-  prop modal_assigns, :any, default: []
+  live_attr :modal_assigns, :any, default: [], doc: "Additional assigns to pass on to the optional modal sub-component"
 
-  @doc """
-  Additional attributes to add onto the modal wrapper
-  """
-  prop opts, :keyword, default: []
+  live_attr :opts, :keyword, default: [], doc: "Additional attributes to add onto the modal wrapper"
 
-  prop autocomplete, :list, default: []
+  live_attr :autocomplete, :list, default: []
 
-  data value, :any, default: nil
+  live_attr :value, :any, default: nil, internal: true
 
-  @doc """
-  Optional prop to make the modal wider
-  """
-  prop xl, :boolean, default: false
+  live_attr :xl, :boolean, default: false, doc: "Optional prop to make the modal wider"
 
-  @doc """
-  Slots for the contents of the modal, title, buttons...
-  """
-  slot open_btn, arg: [autocomplete: :list, value: :any]
-  slot action_btns
-  slot cancel_btn
-  slot title
-  slot default, arg: [autocomplete: :list, value: :any]
+  
+  
+  
+  
+  
 
   def mount(socket) do
     # debug("mounting")

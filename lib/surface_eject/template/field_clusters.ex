@@ -31,22 +31,23 @@ defmodule SurfaceEject.Template.FieldClusters do
   end
 
   defp token({:tag_open, name, attrs, meta}, {stack, acc}, ctx) do
-    if meta[:self_close] do
-      {stack, acc}
-    else
-      case builtin(name, ctx) do
-        @form ->
-          {[{:form, pos(meta), let_var(attrs)} | stack], acc}
+    resolved = builtin(name, ctx)
 
-        @field ->
-          cluster_open(:field, "name", :fields, attrs, meta, stack, acc)
+    cond do
+      meta[:self_close] ->
+        {stack, validate_formless_child(resolved, attrs, true, stack, acc, ctx)}
 
-        @inputs ->
-          cluster_open(:inputs, "for", :inputs, attrs, meta, stack, acc)
+      resolved == @form ->
+        {[{:form, pos(meta), let_var(attrs)} | stack], acc}
 
-        _ ->
-          {stack, acc}
-      end
+      resolved == @field ->
+        cluster_open(:field, "name", :fields, attrs, meta, stack, acc)
+
+      resolved == @inputs ->
+        cluster_open(:inputs, "for", :inputs, attrs, meta, stack, acc)
+
+      true ->
+        {stack, validate_formless_child(resolved, attrs, false, stack, acc, ctx)}
     end
   end
 
@@ -62,25 +63,42 @@ defmodule SurfaceEject.Template.FieldClusters do
   defp token(_other, state, _ctx), do: state
 
   defp cluster_open(kind, attr_name, acc_key, attrs, meta, stack, acc) do
-    with {:ok, access} <- attr_access(attrs, attr_name),
-         {:ok, form_pos, var, needs_let?} <- nearest_form(stack) do
-      acc = put_in(acc[acc_key][pos(meta)], {:convert, access, var})
+    case {attr_access(attrs, attr_name), nearest_form(stack)} do
+      {{:ok, access}, {:ok, form_pos, var, needs_let?}} ->
+        acc = put_in(acc[acc_key][pos(meta)], {:convert, access, var})
 
-      acc =
-        if needs_let? and form_pos,
-          do: update_in(acc.let_inserts, &MapSet.put(&1, form_pos)),
-          else: acc
+        acc =
+          if needs_let? and form_pos,
+            do: update_in(acc.let_inserts, &MapSet.put(&1, form_pos)),
+            else: acc
 
-      {[{kind, pos(meta), :convert} | stack], acc}
-    else
-      _ -> {[{kind, pos(meta), nil} | stack], acc}
+        {[{kind, pos(meta), :convert} | stack], acc}
+
+      {{:ok, _access}, :error} when kind == :field ->
+        # no in-template Form at all: Surface rendered Field as a plain <div>
+        # and never needed a form binding when every control names itself —
+        # tentatively convertible; any child that would rely on the Field's
+        # context name invalidates it (validate_formless_child)
+        acc = put_in(acc[acc_key][pos(meta)], :formless)
+        {[{kind, pos(meta), :formless} | stack], acc}
+
+      _ ->
+        {[{kind, pos(meta), nil} | stack], acc}
     end
   end
 
   defp cluster_close(kind, acc_key, meta, stack, acc) do
+    open_key = if kind == :field, do: :fields, else: :inputs
+
     case Enum.split_while(stack, &(elem(&1, 0) != kind)) do
-      {skipped, [{^kind, _open_pos, :convert} | rest]} ->
-        {skipped ++ rest, put_in(acc[acc_key][pos(meta)], :convert)}
+      {skipped, [{^kind, open_pos, marker} | rest]} when marker != nil ->
+        # the open entry may have been invalidated mid-walk (formless)
+        acc =
+          if Map.has_key?(acc[open_key], open_pos),
+            do: put_in(acc[acc_key][pos(meta)], :convert),
+            else: acc
+
+        {skipped ++ rest, acc}
 
       {skipped, [{^kind, _pos, _} | rest]} ->
         {skipped ++ rest, acc}
@@ -89,6 +107,49 @@ defmodule SurfaceEject.Template.FieldClusters do
         {stack, acc}
     end
   end
+
+  # a Surface form builtin inside a tentatively-formless Field: convertible
+  # only as a bare self-closing <input>-element control that names itself —
+  # anything else (Label/ErrorTag/select/textarea/unnamed) needs the Field's
+  # context binding, so the whole formless Field falls back to the flag
+  defp validate_formless_child(nil, _attrs, _self_close?, _stack, acc, _ctx), do: acc
+
+  defp validate_formless_child(resolved, attrs, self_close?, stack, acc, ctx) do
+    case nearest_field(stack) do
+      {:ok, fpos, :formless} ->
+        if formless_ok?(resolved, attrs, self_close?, ctx),
+          do: acc,
+          else: %{acc | fields: Map.delete(acc.fields, fpos)}
+
+      _ ->
+        acc
+    end
+  end
+
+  defp nearest_field([{:field, fpos, marker} | _rest]), do: {:ok, fpos, marker}
+  defp nearest_field([{:form, _, _} | _rest]), do: :error
+  defp nearest_field([{:inputs, _, _} | _rest]), do: :error
+  defp nearest_field([_other | rest]), do: nearest_field(rest)
+  defp nearest_field([]), do: :error
+
+  defp formless_ok?(resolved, attrs, true = _self_close?, ctx) do
+    case form_mapping(ctx)[resolved] do
+      {:input, type} when type not in ["select", "textarea"] -> named?(attrs)
+      _ -> false
+    end
+  end
+
+  defp formless_ok?(_resolved, _attrs, _self_close?, _ctx), do: false
+
+  defp named?(attrs) do
+    Enum.any?(attrs, fn
+      {"name", value, _ameta} -> value != nil
+      _other -> false
+    end)
+  end
+
+  defp form_mapping(%{profile: %{builtin_components: map}}) when is_map(map), do: map
+  defp form_mapping(_ctx), do: %{}
 
   defp attr_access(attrs, attr_name) do
     Enum.find_value(attrs, :error, fn

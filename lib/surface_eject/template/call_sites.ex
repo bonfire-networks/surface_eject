@@ -8,8 +8,10 @@ defmodule SurfaceEject.Template.CallSites do
     * live components → `<.live_component module={Full.Module} ...>` — unless
       the call passes SLOT ENTRIES (`<:name>`), which `<.live_component>`
       cannot receive: flagged `:manual_required`, left unchanged
-    * project dynamic-dispatch wrappers (profile `dynamic_dispatch`) →
-      `.render` suffix
+    * project dynamic-dispatch wrappers (profile `dynamic_dispatch`) → the
+      mapped plain form: a local function component (`{:local, "fun"}` →
+      `<.fun …>`), Phoenix's `<.live_component …>` (`:live_component`, module
+      kept as an attr), or the legacy `.render` suffix (`:suffix_render`)
     * Surface built-ins (resolved to `Surface.Components.*`) → flagged
       `:manual_required`, left unchanged (small counts; profile form-mapping
       is post-MVP)
@@ -48,7 +50,7 @@ defmodule SurfaceEject.Template.CallSites do
 
   @doc """
   Resolves a tag name to a rewrite action:
-  `:skip | :render_suffix | {:live_component, full} | {:surface_builtin, full} | :unknown_component`.
+  `:skip | :render_suffix | {:local_component, fun} | {:live_component, full_or_nil} | {:surface_builtin, full} | :unknown_component`.
   """
   def resolve(name, ctx) do
     cond do
@@ -59,8 +61,15 @@ defmodule SurfaceEject.Template.CallSites do
       name |> String.split(".") |> List.last() |> String.match?(~r/^[a-z]/) ->
         :skip
 
-      dynamic_dispatch(ctx)[name] == :suffix_render ->
-        :render_suffix
+      dyn = dynamic_dispatch(ctx)[name] ->
+        case dyn do
+          # dynamic function component → a local call, e.g. <.dynamic_component>
+          {:local, fun} -> {:local_component, fun}
+          # dynamic live component → <.live_component> (module stays an attr,
+          # so no module injection: full = nil)
+          :live_component -> {:live_component, nil}
+          :suffix_render -> :render_suffix
+        end
 
       true ->
         resolved = resolve_alias(name, aliases(ctx))
@@ -69,6 +78,7 @@ defmodule SurfaceEject.Template.CallSites do
           String.starts_with?(resolved, "Surface.Components.") -> {:surface_builtin, resolved}
           type(ctx, resolved) == :function_component -> :render_suffix
           type(ctx, resolved) == :live_component -> {:live_component, resolved}
+          type(ctx, resolved) == :live_view -> {:live_view, resolved}
           true -> :unknown_component
         end
     end

@@ -113,17 +113,53 @@ defmodule SurfaceEject.FormComponentsTest do
       assert out =~ ~S|label_class={css_class(["a", "b-x": @c])}|
     end
 
-    test "non-class comma attrs still flag" do
-      {_, logs} = convert(~S|<div data-x={1, 2}>x</div>|)
-      assert Enum.any?(logs, &(&1.category == :attr_comma_list))
+    test "EXPLICIT list class with a {class, cond} keyword pair wraps too (valid HEEx but crashes Phoenix at runtime)" do
+      {out, logs} = convert(~S|<span class={["flex gap-2", "text-error": @bad]}>x</span>|)
+
+      assert out == ~S|<span class={css_class(["flex gap-2", "text-error": @bad])}>x</span>|
+      assert Enum.any?(logs, &(&1.category == :css_class_wrapped))
     end
 
-    test "without a configured helper the flag remains" do
-      ctx = %Context{profile: %SurfaceEject.Profile{}}
-      {out, logs} = Template.convert(~S|<div class={"a", "b-x": @c}>x</div>|, ctx)
+    test "plain string list class is left alone (valid Phoenix, no keyword pairs)" do
+      src = ~S|<div class={["a", "b"]}>x</div>|
+      assert convert(src) |> elem(0) == src
+    end
 
-      assert out == ~S|<div class={"a", "b-x": @c}>x</div>|
-      assert Enum.any?(logs, &(&1.category == :attr_comma_list))
+    test "Phoenix-style conditional class list (cond && class) is left alone" do
+      src = ~S|<div class={["a", @c && "b"]}>x</div>|
+      assert convert(src) |> elem(0) == src
+    end
+
+    test "SINGLE bare keyword pair is the same sugar (class={hidden: @cw})" do
+      {out, _} = convert(~S|<div class={hidden: @cw == true}>x</div>|)
+      assert out == ~S|<div class={css_class([hidden: @cw == true])}>x</div>|
+
+      # non-class attrs with single-kw sugar wrap as a list literal
+      {out, _} = convert(~S|<div data-x={a: 1}>x</div>|)
+      assert out == ~S|<div data-x={[a: 1]}>x</div>|
+
+      # a real tuple literal is NOT keyword sugar — untouched
+      src = ~S|<div data-x={{:ok, 1}}>x</div>|
+      {out, logs} = convert(src)
+      assert out == src
+      refute Enum.any?(logs, &(&1.category == :attr_comma_list))
+    end
+
+    test "non-class comma attrs wrap as list literals (Surface :list sugar)" do
+      {out, _} = convert(~S|<div data-x={1, 2}>x</div>|)
+      assert out == ~S|<div data-x={[1, 2]}>x</div>|
+
+      {out, _} = convert(~S|<Card opts={"data-id": "subject_name"} />|)
+      assert out =~ ~S|opts={["data-id": "subject_name"]}|
+    end
+
+    test "without a configured helper, class sugar wraps as a plain list" do
+      ctx = %Context{profile: %SurfaceEject.Profile{}}
+      {out, _} = Template.convert(~S|<div class={"a", "b-x": @c}>x</div>|, ctx)
+
+      # no css_class helper: list wrap keeps it compiling; keyword pairs in
+      # a class list differ from Surface semantics, so this stays noticeable
+      assert out == ~S|<div class={["a", "b-x": @c]}>x</div>|
     end
   end
 end

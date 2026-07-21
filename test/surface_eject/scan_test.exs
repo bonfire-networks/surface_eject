@@ -26,6 +26,14 @@ defmodule SurfaceEject.ScanTest do
 
     src = "defmodule My.LV do\n  use Bonfire.UI.Common.Web, :surface_live_view\nend"
     assert %{type: :live_view} = Scan.scan_source(src, @bonfire)
+
+    # already-plain atoms and the child variant type too (call-site conversion
+    # — e.g. LiveView-as-tag → live_render — needs them resolvable)
+    src = "defmodule My.LV do\n  use Bonfire.UI.Common.Web, :live_view\nend"
+    assert %{type: :live_view} = Scan.scan_source(src, @bonfire)
+
+    src = "defmodule My.LV do\n  use Bonfire.UI.Common.Web, :surface_live_view_child\nend"
+    assert %{type: :live_view} = Scan.scan_source(src, @bonfire)
   end
 
   test "non-component modules scan with nil type" do

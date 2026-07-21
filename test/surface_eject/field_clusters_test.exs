@@ -18,9 +18,15 @@ defmodule SurfaceEject.FieldClustersTest do
     {out, logs} = convert(tpl)
 
     assert out ==
-             ~S|<.form :let={form} for={@c} phx-submit="s"><div class="fc"><.label>T</.label><.input type="text" field={form[:title]} class="i" /></div></.form>|
+             ~S|<.form :let={form} for={@c} phx-submit="s"><div class="fc"><.label for={form[:title].id}>T</.label><.input type="text" field={form[:title]} class="i" /></div></.form>|
 
     refute Enum.any?(logs, &(&1.severity == :manual_required))
+  end
+
+  test "a Field's <Label> with an explicit for= keeps it (no injection)" do
+    tpl = ~S|<Form for={@c}><Field name={:x}><Label for="custom">L</Label><TextInput /></Field></Form>|
+    {out, _} = convert(tpl)
+    assert out =~ ~S|<.label for="custom">L</.label>|
   end
 
   test "string field name + wrapper markup between control and Field" do
@@ -30,7 +36,7 @@ defmodule SurfaceEject.FieldClustersTest do
     {out, _} = convert(tpl)
 
     assert out ==
-             ~S|<.form :let={form} for={@c}><div><.label class="label">L</.label><div class="w"><.input type="select" field={form["max_uses"]} options={@o} /></div></div></.form>|
+             ~S|<.form :let={form} for={@c}><div><.label for={form["max_uses"].id} class="label">L</.label><div class="w"><.input type="select" field={form["max_uses"]} options={@o} /></div></div></.form>|
   end
 
   test "Form with an existing :let reuses its var" do
@@ -47,6 +53,36 @@ defmodule SurfaceEject.FieldClustersTest do
 
     assert out == tpl
     assert Enum.count(logs, &(&1.category == :surface_builtin)) == 3
+  end
+
+  test "FORMLESS Field whose controls all self-name converts to div + bare inputs" do
+    # no form binding is needed anywhere: Surface rendered exactly this markup
+    tpl =
+      ~S|<Field name={:thread} class="my-4"><TextInput name="name" class="i" value={e(@t, "")} opts={[placeholder: "p"]} /><HiddenInput name="thread_id" value={@id} /><button>S</button></Field>|
+
+    {out, logs} = convert(tpl)
+
+    assert out ==
+             ~S|<div class="my-4"><input type="text" name="name" class="i" value={e(@t, "")} {[placeholder: "p"]} /><input type="hidden" name="thread_id" value={@id} /><button>S</button></div>|
+
+    refute Enum.any?(logs, &(&1.severity == :manual_required))
+    assert Enum.any?(logs, &(&1.category == :field_formless))
+  end
+
+  test "formless Field with an UNNAMED control stays flagged (needs the context binding)" do
+    tpl = ~S|<Field name={:x}><TextInput class="i" /></Field>|
+    {out, logs} = convert(tpl)
+
+    assert out == tpl
+    assert Enum.any?(logs, &(&1.category == :surface_builtin))
+  end
+
+  test "formless Field with a select/textarea control stays flagged (not an <input> element)" do
+    tpl = ~S|<Field name={:x}><Select name="s" options={@o} /></Field>|
+    {out, logs} = convert(tpl)
+
+    assert out == tpl
+    assert Enum.any?(logs, &(&1.category == :surface_builtin))
   end
 
   test "ErrorTag inside a convertible Field is dropped (.input renders errors)" do

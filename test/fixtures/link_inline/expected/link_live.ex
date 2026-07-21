@@ -7,47 +7,30 @@ defmodule Bonfire.UI.Common.LinkLive do
   use Bonfire.UI.Common.Web, :function_component
   # import Phoenix.Component
 
-  @doc "The required path or URL to link to"
-  prop to, :string, required: true
+  live_attr :to, :string, required: true, doc: "The required path or URL to link to"
 
-  @doc "The flag to replace the current history or push a new state (if linking to a LiveView)"
-  prop replace, :boolean, default: false
+  live_attr :replace, :boolean, default: false, doc: "The flag to replace the current history or push a new state (if linking to a LiveView)"
 
-  @doc "The CSS class for the generated `<a>` element"
-  prop class, :css_class, default: ""
+  live_attr :class, :css_class, default: "", doc: "The CSS class for the generated `<a>` element"
 
-  @doc """
-  The label for the generated `<a>` element, used for aria-label, and as the link text if no other content is provided (as a default slot).
-  """
-  prop label, :string
+  live_attr :label, :string, doc: "The label for the generated `<a>` element, used for aria-label, and as the link text if no other content is provided (as a default slot)."
 
-  @doc "What JS hook to attach to the link, if any (possibly overriding the default action of the link)"
-  prop phx_hook, :string, default: nil
-  prop id, :string, default: nil
+  live_attr :phx_hook, :string, default: nil, doc: "What JS hook to attach to the link, if any (possibly overriding the default action of the link)"
+  live_attr :id, :string, default: nil
 
-  prop parent_id, :string, default: nil
+  live_attr :parent_id, :string, default: nil
 
-  @doc "What LiveHandler and/or event name to send the patch event to, if any (possibly overriding the default action of the link)"
-  prop event_handler, :string, default: nil
+  live_attr :event_handler, :string, default: nil, doc: "What LiveHandler and/or event name to send the patch event to, if any (possibly overriding the default action of the link)"
 
-  @doc "What element (and it's parent view or stateful component) to send the event to"
-  prop event_target, :string, default: nil
+  live_attr :event_target, :string, default: nil, doc: "What element (and it's parent view or stateful component) to send the event to"
 
-  @doc "What browser window/frame to target, eg. `_blank`. Defaults to the `link_target` found in context (set page-wide by embed views), or `_top`."
-  prop target, :string, default: nil
+  live_attr :target, :string, default: nil, doc: "What browser window/frame to target, eg. `_blank`. Defaults to the `link_target` found in context (set page-wide by embed views), or `_top`."
 
-  prop external_link_warnings, :boolean, default: false
+  live_attr :external_link_warnings, :boolean, default: false
 
-  @doc """
-  Additional attributes to add onto the generated element
-  """
-  prop opts, :keyword, default: []
+  live_attr :opts, :keyword, default: [], doc: "Additional attributes to add onto the generated element"
 
-  @doc """
-  The content of the generated `<a>` element. If no content is provided,
-  the value of property `label` is used instead.
-  """
-  slot default
+  
 
   defp link_opts(opts, label, target) do
     opts

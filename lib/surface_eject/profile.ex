@@ -33,10 +33,20 @@ defmodule SurfaceEject.Profile do
             # statically-known aliases provided by web macros (merged with scanned ones)
             aliases: %{},
             builtin_components: %{},
+            # local function calls to rename in converted modules (e.g.
+            # Surface-era helpers → their plain-stack analogues)
+            call_renames: %{},
+            # :native mode — does the project use surf_live_attr? true emits
+            # active `live_attr` lines for stateful/internal declarations;
+            # false emits the same translation COMMENTED (file compiles, the
+            # manual step is pre-written)
+            live_attr: false,
+            # :native mode — function name the emitted delegating render
+            # calls for embedded-template modules (e.g. "render_template" for
+            # Bonfire's web.ex convention); nil falls back to flagging
+            embedded_render_delegate: nil,
             # "#Tag" (without the #) → {:component, "New.tag", attr_rules}; attr_rules: %{"attr" => {:rename, "new"} | {:literal, "new", prefix, suffix}} ({:literal, ...} rewrites a literal string value with prefix/suffix, MacroComponent static props are always literals)
             macro_components: %{},
-            # live components whose callers pass slot entries (which <.live_component> cannot receive): full module name → the name of a function-component entry point on that module that accepts the slots and forwards them as assigns into <.live_component>; such call sites rename to `<Alias.entry_point>` instead of being flagged
-            live_component_slot_entrypoints: %{},
             # helper (a function name available where converted templates compile, e.g. via your web-macro imports) that implements Surface's :css_class semantics; when set, comma-list class attrs rewrite to `class={helper([...])}` instead of flagging
             css_class_helper: nil,
             # rename unknown leading-colon attrs on HTML tags to Alpine's x-bind: longhand (`:class` → `x-bind:class`) instead of removing them, for projects using Alpine's bind shorthand, which Surface passed through but HEEx rejects

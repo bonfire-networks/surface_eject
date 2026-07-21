@@ -54,12 +54,12 @@ defmodule SurfaceEject.SurfaceInitDemoTest do
     refute out =~ ~s|@doc "The background color"|
   end
 
-  test "comma-list attr expr (Surface :css_class sugar) is flagged, not silently broken", %{
+  test "class sugar without a css_class_helper wraps but WARNS (semantics differ)", %{
     logs: logs
   } do
     assert Enum.any?(
              logs,
-             &(&1.category == :attr_comma_list and &1.severity == :manual_required)
+             &(&1.category == :css_class_no_helper and &1.severity == :warning)
            )
   end
 

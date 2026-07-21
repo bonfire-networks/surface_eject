@@ -36,7 +36,7 @@
       class="pointer-events-none opacity-70 grayscale-[40%]"
       aria-label={l("Preview of the archived group")}
     >
-      <StatefulComponent.render
+      <.live_component
         module={Config.get(
           [:ui, :group, :hero_component],
           Bonfire.UI.Me.ProfileHeroFullLive
@@ -61,7 +61,7 @@
       />
     </div>
   <% else %>
-    <StatelessComponent.render
+    <.dynamic_component
       module={if @type == :topic,
         do:
           Config.get([:ui, :topic, :sections], [])[tab(@selected_tab)] ||
@@ -76,7 +76,7 @@
         <%= if @type == :topic do %>
           <%!-- a topic rendered in group context: show only the topic hero (which includes the
                sibling-topic nav), mirroring Bonfire.UI.Topics.CategoryLive --%>
-          <StatelessComponent.render
+          <.dynamic_component
             module={maybe_component(Bonfire.UI.Topics.TopicHeroLive, @__context__)}
             category={@category}
             permalink={@permalink}
@@ -86,7 +86,7 @@
             selected_category_id={id(@category)}
             user={e(@category, :parent_category, nil)}
           />
-          <StatelessComponent.render
+          <.dynamic_component
             :if={@can_create_in_category}
             module={maybe_component(Bonfire.UI.Common.InlineComposerPlaceholderLive, @__context__)}
             selected_tab={@selected_tab}
@@ -121,7 +121,7 @@
             </div>
           </div>
         <% else %>
-          <StatefulComponent.render
+          <.live_component
             module={Config.get(
               [:ui, :group, :hero_component],
               Bonfire.UI.Me.ProfileHeroFullLive
@@ -145,7 +145,7 @@
             date={e(assigns, :group_date, nil)}
           />
           <div class="py-feed">
-            <StatelessComponent.render
+            <.dynamic_component
               :if={@can_create_in_category}
               module={maybe_component(Bonfire.UI.Common.InlineComposerPlaceholderLive, @__context__)}
               selected_tab={@selected_tab}
@@ -162,6 +162,6 @@
           </div>
         <% end %><% end %>
       </:header>
-    </StatelessComponent.render>
+    </.dynamic_component>
   <% end %>
 </main>

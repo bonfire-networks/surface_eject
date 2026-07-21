@@ -9,13 +9,24 @@ defmodule SurfaceEject.Profiles.Bonfire do
 
   def profile do
     %Profile{
-      declarations: :compat,
+      # :native — attr/slot for function components (with the delegating
+      # render for sface-colocated modules), live_attr for stateful
+      declarations: :native,
+      live_attr: true,
+      embedded_render_delegate: "render_template",
       web_module: :preserve,
       remote_call: :render,
       web_macros: %{
         stateless_component: :function_component,
         stateful_component: :live_component,
-        surface_live_view: :live_view
+        surface_live_view: :live_view,
+        surface_live_view_child: :live_view,
+        live_view_child: :live_view,
+        # plain atoms too: already-native modules (e.g. PersistentLive) must
+        # also type-resolve for call-site conversion (live_render etc.)
+        function_component: :function_component,
+        live_component: :live_component,
+        live_view: :live_view
       },
       # converted modules must compile through the context-lib-wired PLAIN
       # macros (the Surface atoms keep the Surface stack for unconverted
@@ -23,13 +34,19 @@ defmodule SurfaceEject.Profiles.Bonfire do
       use_atom_map: %{
         stateless_component: :function_component,
         stateful_component: :live_component,
-        surface_live_view: :live_view
+        surface_live_view: :live_view,
+        surface_live_view_child: :live_view_child
       },
       # macros that take web-macro atoms like `use` does (Bonfire's LVN variant)
       use_like_macros: [:use_if_enabled],
+      # Surface's dynamic dispatch → the plain-stack equivalents:
+      #   <StatelessComponent module={M} …>  → <.dynamic_component module={M} …>
+      #     (Bonfire.UI.Common.dynamic_component/1, apply-based, imported)
+      #   <StatefulComponent id=.. module={M} …> → <.live_component module={M} …>
+      #     (Phoenix's own — takes a dynamic module natively; module stays as-is)
       dynamic_dispatch: %{
-        "StatelessComponent" => :suffix_render,
-        "StatefulComponent" => :suffix_render
+        "StatelessComponent" => {:local, "dynamic_component"},
+        "StatefulComponent" => :live_component
       },
       # Bonfire's web.ex surface_helpers provide Surface's own component
       # library PLUS a handful of Bonfire components as macro-quoted aliases
@@ -57,11 +74,9 @@ defmodule SurfaceEject.Profiles.Bonfire do
              "micro" => {:literal, "icon", "heroicons:", "-16-solid"}
            }}
       },
-      # OpenModalLive callers pass slot entries; its open_modal/1
-      # function-component entry point (see plan) forwards them as assigns
-      live_component_slot_entrypoints: %{
-        "Bonfire.UI.Common.OpenModalLive" => "open_modal"
-      },
+      # Surface-era web.ex helper → the plain-stack analogue (both render
+      # the colocated template)
+      call_renames: %{render_sface: :render_template},
       # Bonfire templates use Alpine's bind shorthand (`:class=`, `:aria-*=`)
       alpine_bind: true,
       # vendored in Bonfire.UI.Common.CoreComponents (imported by the web macros), same semantics as Surface's :css_class

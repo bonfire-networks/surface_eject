@@ -73,42 +73,61 @@ defmodule SurfaceEject.CallSitesTest do
                ~S(<.live_component module={Some.Live} id="x">c</.live_component>)
     end
 
-    test "with slot entries + a profile entry point renames to the function component" do
-      # the entry point (a function component on the live component's module, forwarding assigns incl. slots into <.live_component>) accepts slot entries natively
-      ctx = %{
-        @ctx
-        | profile: %{
-            @ctx.profile
-            | live_component_slot_entrypoints: %{"Some.Live" => "open_thing"}
-          }
-      }
-
+    test "with slot entries converts directly to <.live_component> (LV delivers named slots as assigns)" do
+      # verified at runtime: <.live_component module={M}><:item> delivers @item
+      # to the component, so no entry-point indirection is needed
       src = ~S(<LiveThing id="x"><:item>y</:item></LiveThing>)
 
-      assert convert(src, ctx) ==
-               ~S(<LiveThing.open_thing id="x"><:item>y</:item></LiveThing.open_thing>)
+      assert convert(src) ==
+               ~S(<.live_component module={Some.Live} id="x"><:item>y</:item></.live_component>)
 
-      refute Enum.any?(convert_logs(src, ctx), &(&1.severity == :manual_required))
-    end
-
-    test "with slot entries is left unchanged and flagged" do
-      src = ~S(<LiveThing id="x"><:item>y</:item></LiveThing>)
-      assert convert(src) == src
-
+      refute Enum.any?(convert_logs(src), &(&1.severity == :manual_required))
+      # still logged (info) so reviewers can see which callers pass slots
       assert Enum.any?(
                convert_logs(src),
-               &(&1.category == :live_component_slots and &1.severity == :manual_required)
+               &(&1.category == :live_component_slots and &1.severity == :info)
              )
     end
   end
 
-  describe "dynamic dispatch (profile suffix rules)" do
-    test "StatelessComponent/StatefulComponent get .render suffix" do
-      assert convert(~S|<StatelessComponent module={maybe_component(M, @__context__)} />|) ==
-               ~S|<StatelessComponent.render module={maybe_component(M, @__context__)} />|
+  describe "live views as tags (Surface's live_render sugar)" do
+    test "self-closing LiveView tag becomes live_render" do
+      ctx = %{@ctx | type_map: %{"My.StickyLive" => :live_view}}
 
+      src = ~S|<My.StickyLive id={:persistent} sticky container={{:div, class: "w"}} />|
+
+      assert convert(src, ctx) ==
+               ~S|{live_render(@socket, My.StickyLive, id: :persistent, sticky: true, container: {:div, class: "w"})}|
+    end
+  end
+
+  describe "dynamic dispatch (profile rules)" do
+    test "StatelessComponent → <.dynamic_component> (module stays an attr)" do
+      assert convert(~S|<StatelessComponent module={maybe_component(M, @__context__)} />|) ==
+               ~S|<.dynamic_component module={maybe_component(M, @__context__)} />|
+    end
+
+    test "StatelessComponent with slots renames open + close" do
+      assert convert("<StatelessComponent module={M}>x</StatelessComponent>") ==
+               "<.dynamic_component module={M}>x</.dynamic_component>"
+    end
+
+    test "StatefulComponent → <.live_component> (dynamic module kept, no injection)" do
       assert convert("<StatefulComponent id=\"i\" module={M}>x</StatefulComponent>") ==
-               "<StatefulComponent.render id=\"i\" module={M}>x</StatefulComponent.render>"
+               "<.live_component id=\"i\" module={M}>x</.live_component>"
+    end
+
+    test "StatefulComponent self-closing" do
+      assert convert(~S|<StatefulComponent id="b" module={maybe_component(M, @c)} />|) ==
+               ~S|<.live_component id="b" module={maybe_component(M, @c)} />|
+    end
+
+    test "StatefulComponent WITH slot entries still converts (dynamic: no entrypoint possible; <.live_component> forwards slots)" do
+      src = ~S|<StatefulComponent id="f" module={M}><:bottom>x</:bottom></StatefulComponent>|
+      out = convert(src)
+
+      assert out == ~S|<.live_component id="f" module={M}><:bottom>x</:bottom></.live_component>|
+      refute Enum.any?(convert_logs(src), &(&1.severity == :manual_required))
     end
   end
 

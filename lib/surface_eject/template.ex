@@ -27,6 +27,14 @@ defmodule SurfaceEject.Template do
   Returns `{output, logs}`.
   """
   def convert(source, %Context{} = ctx \\ %Context{}) do
+    # source PRE-pass (before tokenizing, so spans stay consistent):
+    # Surface's slot_assigned?/1 → a plain slot-assign presence check
+    source =
+      Regex.replace(~r/slot_assigned\?\(:(\w+)\)/, source, fn _, name ->
+        name = if name == "default", do: "inner_block", else: name
+        "(@#{name} && @#{name} != [])"
+      end)
+
     tokens = Surface.Compiler.Tokenizer.tokenize!(source, file: ctx.file)
     index = BlockIndex.build(tokens)
 
@@ -145,35 +153,63 @@ defmodule SurfaceEject.Template do
       :render_suffix ->
         region(state, tag_name_span(meta), name <> ".render")
 
+      # a project dynamic-dispatch wrapper mapped to a local function component
+      # (e.g. <StatelessComponent …> → <.dynamic_component …>): rename the tag,
+      # attrs (incl. the existing module={…}) carry over verbatim
+      {:local_component, fun} ->
+        region(state, tag_name_span(meta), ".#{fun}")
+
+      # `<.live_component>` accepts named slot entries (delivered to the
+      # component as assigns — verified at runtime on LV 1.2), so ALL callers
+      # convert the same way regardless of slots. full = nil for dynamic
+      # dispatch (module is already an attr); a known static module gets
+      # module={Full} added.
       {:live_component, full} ->
-        cond do
-          not slot_children?(state, meta) ->
-            region(state, tag_name_span(meta), ".live_component module={#{full}}")
+        module_attr = if full, do: " module={#{full}}", else: ""
+        state = region(state, tag_name_span(meta), ".live_component#{module_attr}")
 
-          entry = slot_entrypoint(state, full) ->
-            # the entry point is a function component on the module that
-            # accepts the slots and forwards them as assigns
-            state
-            |> region(tag_name_span(meta), "#{name}.#{entry}")
-            |> log(
-              :info,
-              :slot_entrypoint,
-              meta.line,
-              "<#{name}> passes slot entries — renamed to the #{entry}/1 function-component entry point"
-            )
-
-          true ->
-            log(
-              state,
-              :manual_required,
-              :live_component_slots,
-              meta.line,
-              "<#{name}> passes slot entries — <.live_component> cannot receive them; left unchanged (convert callers after redesign, or the callee's slots)"
-            )
+        if slot_children?(state, meta) do
+          log(
+            state,
+            :info,
+            :live_component_slots,
+            meta.line,
+            "<#{name}> passes slot entries → <.live_component> (delivered to the component as assigns)"
+          )
+        else
+          state
         end
 
       {:surface_builtin, resolved} ->
         builtin_open(resolved, name, attrs, meta, state)
+
+      # Surface rendered LiveView tags via live_render — emit that directly
+      {:live_view, full} ->
+        if meta.self_close do
+          opts =
+            Enum.map_join(attrs, ", ", fn
+              {aname, nil, _} -> "#{aname}: true"
+              {aname, {:expr, expr, _}, _} -> "#{aname}: #{String.trim(expr)}"
+              {aname, {:string, str, _}, _} -> "#{aname}: #{inspect(str)}"
+            end)
+
+          state
+          |> region({{meta.line, meta.column - 1}, node_end(meta)}, "{live_render(@socket, #{full}, #{opts})}")
+          |> log(
+            :info,
+            :live_view_tag,
+            meta.line,
+            "LiveView tag <#{name}> converted to live_render/3"
+          )
+        else
+          log(
+            state,
+            :manual_required,
+            :live_view_tag,
+            meta.line,
+            "LiveView tag <#{name}> with children — convert to live_render/3 manually"
+          )
+        end
 
       :unknown_component ->
         log(
@@ -191,22 +227,15 @@ defmodule SurfaceEject.Template do
       :render_suffix ->
         region(state, tag_name_span(meta), name <> ".render")
 
-      {:live_component, full} ->
+      {:local_component, fun} ->
+        region(state, tag_name_span(meta), ".#{fun}")
+
+      # every live-component open converts to <.live_component> now, so every
+      # matching close renames too (slots or not, static or dynamic)
+      {:live_component, _full} ->
         case state.pairs[{meta.line, meta.column}] do
-          {:close_of, open_pos} ->
-            cond do
-              not get_in(state.pairs, [open_pos, :slot_children]) ->
-                region(state, tag_name_span(meta), ".live_component")
-
-              entry = slot_entrypoint(state, full) ->
-                region(state, tag_name_span(meta), "#{name}.#{entry}")
-
-              true ->
-                state
-            end
-
-          _ ->
-            state
+          {:close_of, _open_pos} -> region(state, tag_name_span(meta), ".live_component")
+          _ -> state
         end
 
       {:surface_builtin, resolved} ->
@@ -261,6 +290,18 @@ defmodule SurfaceEject.Template do
           &%{&1 | converted_links: MapSet.put(&1.converted_links, {meta.line, meta.column})}
         )
 
+      # inside a formless Field the controls become bare <input>s — Surface
+      # rendered exactly that (`.input` wraps in div+label and rejects
+      # type="hidden"); prescan guarantees self-closing + explicit name
+      match?({:input, _}, spec) and binding == :formless ->
+        {:input, type} = spec
+        name_end = {meta.line_end, meta.column_end}
+
+        state
+        |> region(tag_name_span(meta), "input")
+        |> region({name_end, name_end}, ~s( type="#{type}"))
+        |> form_attrs(attrs, %{"selected" => "value"})
+
       spec == nil or spec == :link or binding == :opaque or
           (match?({:input, _}, spec) and not meta.self_close) ->
         builtin_flag(state, name, meta)
@@ -297,6 +338,20 @@ defmodule SurfaceEject.Template do
         |> region(tag_name_span(meta), "div")
         |> delete_attr(attrs, "name")
         |> push_field({:convertible, access, var}, meta)
+
+      # no in-template Form, every control self-names (prescan-verified):
+      # the name attr fed a context nobody reads — same <div>, no binding
+      :formless ->
+        state
+        |> region(tag_name_span(meta), "div")
+        |> delete_attr(attrs, "name")
+        |> push_field(:formless, meta)
+        |> log(
+          :info,
+          :field_formless,
+          meta.line,
+          "<Field> without an in-template <Form> → <div>; its self-named controls become bare <input>s (what Surface rendered)"
+        )
 
       _ ->
         state |> builtin_flag(name, meta) |> push_field(:opaque, meta)
@@ -407,6 +462,9 @@ defmodule SurfaceEject.Template do
           state
           |> region(tag_name_span(meta), new_tag)
           |> macro_attrs(attrs, rules)
+          # the generic attr pass too (comma/keyword sugar etc.) — rule
+          # attrs are literal strings, which it ignores
+          |> then(&Enum.reduce(attrs, &1, fn a, st -> attr(a, {mname, meta}, st) end))
         else
           state
           |> macro_flag(mname, meta)
@@ -444,12 +502,14 @@ defmodule SurfaceEject.Template do
       else: %{state | macro_bail_stack: [mname | state.macro_bail_stack]}
   end
 
-  # rule-relevant attrs must be literal strings (MacroComponent static props
-  # always are; anything else means we can't statically rewrite — flag)
+  # {:literal, ...} rules build a new value, so they need a literal string; {:rename, _} only touches the attr NAME, any value (even a dynamic expression) carries over verbatim
   defp macro_convertible?(attrs, rules) do
     Enum.all?(attrs, fn
-      {aname, value, _ameta} when is_map_key(rules, aname) -> match?({:string, _, _}, value)
-      _ -> true
+      {aname, value, _ameta} when is_map_key(rules, aname) ->
+        match?({:rename, _}, rules[aname]) or match?({:string, _, _}, value)
+
+      _ ->
+        true
     end)
   end
 
@@ -512,9 +572,25 @@ defmodule SurfaceEject.Template do
     |> form_attrs(attrs, %{"selected" => "value"})
   end
 
-  defp form_open({:rename, new}, _attrs, meta, state, _binding) do
-    region(state, tag_name_span(meta), "." <> new)
+  defp form_open({:rename, new}, attrs, meta, state, binding) do
+    state = region(state, tag_name_span(meta), "." <> new)
+
+    # a <Label> inside a convertible <Field> — associate it with the control the way Surface's <Label> did (its `for` defaulted to the field's input id), unless it already carries an explicit `for`
+    case {new, binding} do
+      {"label", {:convertible, access, var}} ->
+        if has_attr?(attrs, "for") do
+          state
+        else
+          name_end = {meta.line_end, meta.column_end}
+          region(state, {name_end, name_end}, ~s( for=#{"{"}#{var}[#{access}].id#{"}"}))
+        end
+
+      _ ->
+        state
+    end
   end
+
+  defp has_attr?(attrs, name), do: Enum.any?(attrs, fn {a, _v, _m} -> a == name end)
 
   defp form_attrs(state, attrs, renames) do
     Enum.reduce(attrs, state, fn
@@ -548,12 +624,6 @@ defmodule SurfaceEject.Template do
         |> region({close_brace, close_brace}, "]")
     end
   end
-
-  defp slot_entrypoint(%{ctx: %{profile: %{live_component_slot_entrypoints: map}}}, full)
-       when is_map(map),
-       do: map[full]
-
-  defp slot_entrypoint(_state, _full), do: nil
 
   defp slot_children?(%{pairs: pairs}, meta) do
     case pairs[{meta.line, meta.column}] do
@@ -635,13 +705,36 @@ defmodule SurfaceEject.Template do
         |> region({{smeta.line, smeta.column}, {smeta.line_end, smeta.column_end}}, "#{module}##{name}")
         |> hook_info(ameta, "#{module}##{name}")
 
-      _expr ->
-        hook_flag(state, value, ameta)
+      {:expr, expr, emeta} ->
+        # `:hook={"Name", from: Some.Mod}` with literal parts → exact name
+        case hook_from_expr(expr) do
+          {:ok, hook, mod} ->
+            state
+            |> region(attr_name_span(ameta), "phx-hook")
+            |> region(
+              {{emeta.line, emeta.column - 1}, {emeta.line_end, emeta.column_end + 1}},
+              ~s("#{mod}##{hook}")
+            )
+            |> hook_info(ameta, "#{mod}##{hook}")
+
+          :error ->
+            hook_flag(state, value, ameta)
+        end
     end
   end
 
   defp attr({":hook", value, ameta}, _tag_meta, state) do
     hook_flag(state, value, ameta)
+  end
+
+  defp hook_from_expr(expr) do
+    case Code.string_to_quoted("{#{expr}}") do
+      {:ok, {hook, [from: {:__aliases__, _, parts}]}} when is_binary(hook) ->
+        {:ok, hook, Enum.join(parts, ".")}
+
+      _ ->
+        :error
+    end
   end
 
   defp attr({":on-" <> event, _value, ameta}, _tag_meta, state) do
@@ -681,6 +774,41 @@ defmodule SurfaceEject.Template do
     end
   end
 
+  # Surface's other spread spelling: `...{expr}` (dots OUTSIDE the braces)
+  # tokenizes as a nil-value attr named "...{expr}" — drop the dots
+  defp attr({"..." <> rest, nil, ameta}, _tag_meta, state) when rest != "" do
+    region(state, attr_name_span(ameta), rest)
+  end
+
+  # dynamic attribute NAME (`phx-value-{@ev}={v}`) — Surface tolerated
+  # interpolated names, HEEx rejects them; the exact equivalent is a
+  # runtime-built map spread: {%{"phx-value-#{@ev}" => v}}
+  defp attr({name, value, ameta}, _tag_meta, state)
+       when is_binary(name) and value != nil do
+    case String.contains?(name, "{") && Regex.run(~r/^(.*?)\{(.+)\}$/, name) do
+      [_, prefix, name_expr] ->
+        value_text =
+          case value do
+            {:expr, text, _} -> text
+            {:string, text, _} -> inspect(text)
+          end
+
+        text = "{%{\"#{prefix}" <> "\#{" <> name_expr <> "}\" => #{value_text}}}"
+
+        state
+        |> region({{ameta.line, ameta.column}, value_end(value, ameta)}, text)
+        |> log(
+          :info,
+          :dynamic_attr_name,
+          ameta.line,
+          "dynamic attribute name #{name} converted to a map spread"
+        )
+
+      _ ->
+        attr_fallthrough({name, value, ameta}, state)
+    end
+  end
+
   defp attr({:root, {:tagged_expr, "...", _expr, marker_meta}, _ameta}, _tag_meta, state) do
     # `{...@opts}` → `{@opts}`: delete just the `...` marker
     region(
@@ -690,9 +818,11 @@ defmodule SurfaceEject.Template do
     )
   end
 
+  defp attr(attr, _tag_meta, state), do: attr_fallthrough(attr, state)
+
   # Surface's comma-list attr sugar (`class={"a", "b": cond}`, :css_class / :list props) is NOT valid HEEx, the braces would parse as a tuple and render garbage. Flag rather than silently emit (rewrite to a `[...]`
   # list, keyword pairs as `cond && "class"`).
-  defp attr({name, {:expr, expr, emeta}, _ameta}, _tag_meta, state) do
+  defp attr_fallthrough({name, {:expr, expr, emeta}, _ameta}, state) do
     if MapSet.member?(state.handled_attrs, {emeta.line, emeta.column}) do
       state
     else
@@ -700,7 +830,7 @@ defmodule SurfaceEject.Template do
     end
   end
 
-  defp attr(_attr, _tag_meta, state), do: state
+  defp attr_fallthrough(_attr, state), do: state
 
   defp hook_info(state, ameta, name) do
     log(
@@ -729,38 +859,109 @@ defmodule SurfaceEject.Template do
   defp html_tag?(name), do: name =~ ~r/^[a-z]/ and not String.contains?(name, ".")
 
   defp flag_comma_list(name, expr, emeta, state) do
+    cond do
+      # an EXPLICIT list literal with a `{atom, _}` keyword pair —
+      # `class={["a", "b": cond]}` — is valid HEEx (so it isn't the bare-tuple sugar below), but Phoenix's class handling `to_string`s the keyword tuple and crashes at RUNTIME. It's Surface :css_class semantics, so wrap the whole list in the helper: `class={css_class(["a", "b": cond])}`.
+      class_attr?(name) and explicit_css_keyword_list?(expr) ->
+        wrap_css_class_list(name, expr, emeta, state)
+
+      true ->
+        flag_bare_comma_list(name, expr, emeta, state)
+    end
+  end
+
+  defp explicit_css_keyword_list?(expr) do
+    case Code.string_to_quoted(expr) do
+      {:ok, list} when is_list(list) -> Enum.any?(list, &css_keyword_pair?/1)
+      _ -> false
+    end
+  end
+
+  defp css_keyword_pair?({key, _value}) when is_atom(key), do: true
+  defp css_keyword_pair?(_), do: false
+
+  defp wrap_css_class_list(name, expr, emeta, state) do
+    expr_start = {emeta.line, emeta.column}
+    expr_end = {emeta.line_end, emeta.column_end}
+
+    case css_class_helper(state) do
+      helper when is_binary(helper) ->
+        state
+        |> region({expr_start, expr_start}, "#{helper}(")
+        |> region({expr_end, expr_end}, ")")
+        |> log(
+          :info,
+          :css_class_wrapped,
+          emeta.line,
+          "#{name} list with {class, cond} keyword pairs wrapped in #{helper}(...) (Surface :css_class semantics; Phoenix's class handling crashes on the keyword tuple)"
+        )
+
+      _ ->
+        log(
+          state,
+          :warning,
+          :css_class_no_helper,
+          emeta.line,
+          "#{name} list has {class, cond} keyword pairs that crash Phoenix's class handling — configure a css_class_helper or rewrite the pairs as `cond && \"class\"`"
+        )
+    end
+  end
+
+  defp flag_bare_comma_list(name, expr, emeta, state) do
     case Code.string_to_quoted("[#{expr}]") do
+      # single bare keyword pair (`class={hidden: @cw}`) is the same sugar —
+      # but a real tuple literal (`{{:ok, 1}}`, source starts with `{`) isn't
+      {:ok, [{key, _value}] = list} when is_atom(key) ->
+        if String.starts_with?(String.trim_leading(expr), "{"),
+          do: state,
+          else: comma_list(name, expr, emeta, state, list)
+
       {:ok, list} when is_list(list) and length(list) > 1 ->
-        helper = css_class_helper(state)
-
-        if helper && class_attr?(name) do
-          # `class={a, b, c: cond}` → `class={helper([a, b, c: cond])}` —
-          # valid HEEx, identical Surface :css_class semantics at runtime
-          expr_start = {emeta.line, emeta.column}
-          expr_end = {emeta.line_end, emeta.column_end}
-
-          state
-          |> region({expr_start, expr_start}, "#{helper}([")
-          |> region({expr_end, expr_end}, "])")
-          |> log(
-            :info,
-            :css_class_wrapped,
-            emeta.line,
-            "#{name} comma-list wrapped in #{helper}([...]) (Surface :css_class semantics)"
-          )
-        else
-          log(
-            state,
-            :manual_required,
-            :attr_comma_list,
-            emeta.line,
-            "#{name}={#{expr}} uses Surface's comma-list sugar — invalid HEEx (parses as a tuple); " <>
-              "rewrite as a list: #{name}={[...]} with keyword pairs as `cond && \"class\"`"
-          )
-        end
+        comma_list(name, expr, emeta, state, list)
 
       _ ->
         state
+    end
+  end
+
+  defp comma_list(name, _expr, emeta, state, _list) do
+    helper = css_class_helper(state)
+
+    if helper && class_attr?(name) do
+      # `class={a, b, c: cond}` → `class={helper([a, b, c: cond])}` —
+      # valid HEEx, identical Surface :css_class semantics at runtime
+      expr_start = {emeta.line, emeta.column}
+      expr_end = {emeta.line_end, emeta.column_end}
+
+      state
+      |> region({expr_start, expr_start}, "#{helper}([")
+      |> region({expr_end, expr_end}, "])")
+      |> log(
+        :info,
+        :css_class_wrapped,
+        emeta.line,
+        "#{name} comma-list wrapped in #{helper}([...]) (Surface :css_class semantics)"
+      )
+    else
+      # non-class comma/keyword sugar: Surface's :keyword/:list prop
+      # semantics — a plain list literal is the exact equivalent. For CLASS
+      # attrs without a css_class_helper it still compiles but keyword pairs
+      # lose their conditional meaning → warning, not info
+      expr_start = {emeta.line, emeta.column}
+      expr_end = {emeta.line_end, emeta.column_end}
+
+      {severity, category, message} =
+        if class_attr?(name) do
+          {:warning, :css_class_no_helper,
+           "#{name} sugar wrapped as a list WITHOUT a css_class_helper — keyword pairs lose their conditional meaning; configure the helper or rewrite"}
+        else
+          {:info, :attr_list_wrapped, "#{name} comma/keyword sugar wrapped as a list literal"}
+        end
+
+      state
+      |> region({expr_start, expr_start}, "[")
+      |> region({expr_end, expr_end}, "]")
+      |> log(severity, category, emeta.line, message)
     end
   end
 

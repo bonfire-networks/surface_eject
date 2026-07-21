@@ -23,8 +23,10 @@ defmodule SurfaceEject.Ex.Sigils do
 
   defp sigil_rules do
     [
+      # heredocs FIRST — by the time the single-quote rule runs no ~F""" is
+      # left, so it can match the empty form ~F"" too
       {~r/~F"""(.*?)"""/s, fn code -> {~s(~H"""), code, ~s(""")} end},
-      {~r/~F"([^"].*?)"/s, fn code -> {~s(~H"), code, ~s(")} end},
+      {~r/~F"(.*?)"/s, fn code -> {~s(~H"), code, ~s(")} end},
       {~r/~F\[(.*?)\]/s, fn code -> {"~H[", code, "]"} end},
       {~r/~F\((.*?)\)/s, fn code -> {"~H(", code, ")"} end},
       {~r/~F\{(.*?)\}/s, fn code -> {"~H{", code, "}"} end}

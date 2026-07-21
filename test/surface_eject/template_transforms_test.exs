@@ -109,17 +109,24 @@ defmodule SurfaceEject.TemplateTransformsTest do
       {out, _} = SurfaceEject.Template.convert(~S(<div :hook>x</div>), ctx)
       assert out == ~S(<div phx-hook="My.LazyImage#default">x</div>)
 
-      # expr form ({name, from: Mod}) stays flagged
+      # expr form with literal parts converts exactly
       {out, logs} =
         SurfaceEject.Template.convert(~S(<div :hook={"X", from: Other.Mod}>x</div>), ctx)
 
-      assert out =~ "phx-hook"
+      assert out == ~S(<div phx-hook="Other.Mod#X">x</div>)
+      refute Enum.any?(logs, &(&1.severity == :manual_required))
+
+      # dynamic expr stays flagged
+      {_, logs} = SurfaceEject.Template.convert(~S(<div :hook={@dyn}>x</div>), ctx)
       assert Enum.any?(logs, &(&1.severity == :manual_required))
-      _ = out
     end
 
     test "root spread {...expr} becomes {expr}" do
       assert convert(~S(<div {...@opts}>x</div>)) == ~S(<div {@opts}>x</div>)
+    end
+
+    test "dots-outside spread ...{expr} becomes {expr} too" do
+      assert convert(~S(<div ...{assigns}>x</div>)) == ~S(<div {assigns}>x</div>)
     end
 
     test ":if/:for/:let attrs pass through (valid HEEx)" do
@@ -145,6 +152,23 @@ defmodule SurfaceEject.TemplateTransformsTest do
       {out, logs} = SurfaceEject.Template.convert(~S(<Card :class="x" />), ctx)
       refute out =~ ~S(<Card :class)
       assert Enum.any?(logs, &(&1.category == :unknown_directive))
+    end
+
+    test "slot_assigned?(:name) becomes a slot-assign presence check" do
+      {out, _} = SurfaceEject.Template.convert("{#if slot_assigned?(:open_btn)}A{/if}")
+      assert out == "<%= if (@open_btn && @open_btn != []) do %>A<% end %>"
+
+      {out, _} = SurfaceEject.Template.convert("<div :if={slot_assigned?(:default)}>x</div>")
+      assert out == "<div :if={(@inner_block && @inner_block != [])}>x</div>"
+    end
+
+    test "dynamic attribute NAME (Surface-only) becomes a root spread" do
+      # phx-value-{@ev}={expr} — Surface tolerated interpolated attr names,
+      # HEEx rejects them; the exact equivalent is a runtime-built map spread
+      {out, logs} = SurfaceEject.Template.convert(~S(<a phx-value-{@ev}={@val}>x</a>))
+
+      assert out == ~S(<a {%{"phx-value-#{@ev}" => @val}}>x</a>)
+      assert Enum.any?(logs, &(&1.category == :dynamic_attr_name))
     end
 
     test "unknown directive is removed with a TODO comment and flagged" do

@@ -8,76 +8,72 @@ defmodule Bonfire.UI.Social.FeedLive do
   alias Bonfire.Social.Feeds.LiveHandler
   alias Bonfire.UI.Common.LoadMoreLive
 
-  prop feed_name, :any, default: nil
-  prop feed_id, :any, default: nil
-  prop feed_ids, :any, default: nil
-  prop feed, :any, default: nil
-  prop subject_user, :any, default: nil
+  live_attr :feed_name, :any, default: nil
+  live_attr :feed_id, :any, default: nil
+  live_attr :feed_ids, :any, default: nil
+  live_attr :feed, :any, default: nil
+  live_attr :subject_user, :any, default: nil
 
-  prop page_info, :any, default: nil
-  prop previous_page_info, :any, default: nil
-  prop hide_guest_fallback, :boolean, default: false
+  live_attr :page_info, :any, default: nil
+  live_attr :previous_page_info, :any, default: nil
+  live_attr :hide_guest_fallback, :boolean, default: false
 
-  prop loading, :boolean, default: true
-  prop reloading, :boolean, default: false
+  live_attr :loading, :boolean, default: true
+  live_attr :reloading, :boolean, default: false
 
-  prop cache_strategy, :any, default: nil
-  prop hide_activities, :any, default: nil
-  prop hide_actions, :any, default: false
+  live_attr :cache_strategy, :any, default: nil
+  live_attr :hide_activities, :any, default: nil
+  live_attr :hide_actions, :any, default: false
 
-  prop feedback_title, :string, default: nil
-  prop feedback_message, :string, default: nil
+  live_attr :feedback_title, :string, default: nil
+  live_attr :feedback_message, :string, default: nil
 
-  prop showing_within, :atom, default: nil
+  live_attr :showing_within, :atom, default: nil
 
-  prop hide_load_more, :boolean, default: false
-  prop enable_marker, :boolean, default: false
+  live_attr :hide_load_more, :boolean, default: false
+  live_attr :enable_marker, :boolean, default: false
 
-  prop verb_default, :string, default: nil
+  live_attr :verb_default, :string, default: nil
 
-  prop page_title, :string, default: nil
-  prop feed_title, :string, default: nil
+  live_attr :page_title, :string, default: nil
+  live_attr :feed_title, :string, default: nil
 
-  @doc "What LiveHandler and/or event name to send the patch event to for tabs navigation (if any)"
-  # "select_tab"
-  prop event_handler, :string, default: nil
+  live_attr :event_handler, :string, default: nil, doc: "What LiveHandler and/or event name to send the patch event to for tabs navigation (if any)"
   # FIXME: should optimise by LinkPatchLive but currently not working
-  prop tab_link_component, :atom, default: LinkLive
+  live_attr :tab_link_component, :atom, default: LinkLive
 
-  prop current_url, :any, default: nil
-  prop tab_path_prefix, :string, default: "?tab="
-  prop tab_path_suffix, :string, default: nil
-  prop hide_filters, :boolean, default: false
-  prop selected_tab, :any, default: nil
-  prop top_page, :any, default: nil
-  prop show_back_button, :boolean, default: false
+  live_attr :current_url, :any, default: nil
+  live_attr :tab_path_prefix, :string, default: "?tab="
+  live_attr :tab_path_suffix, :string, default: nil
+  live_attr :hide_filters, :boolean, default: false
+  live_attr :selected_tab, :any, default: nil
+  live_attr :top_page, :any, default: nil
+  live_attr :show_back_button, :boolean, default: false
 
-  prop tabs_class, :css_class, default: nil
+  live_attr :tabs_class, :css_class, default: nil
 
-  prop tab_class, :css_class,
-    default:
+  live_attr :tab_class, :css_class, default:
       "flex flex-1 pt-4 px-2 text-base capitalize hover:bg-base-content hover:bg-opacity-10 place-content-center lined_tab"
 
-  prop item_class, :css_class,
-    default: "text-muted text-sm pb-4 border-b-4 border-transparent font-medium"
+  live_attr :item_class, :css_class, default: "text-muted text-sm pb-4 border-b-4 border-transparent font-medium"
 
-  prop tab_primary_class, :css_class, default: nil
+  live_attr :tab_primary_class, :css_class, default: nil
 
-  prop activity_class, :string, default: nil
-  prop feed_filters, :any, default: nil
+  live_attr :activity_class, :string, default: nil
+  live_attr :feed_filters, :any, default: nil
   # prop time_limit, :any, default: nil
   # prop sort_order, :any, default: false
-  prop activity_preloads, :tuple, default: {nil, nil}
+  live_attr :activity_preloads, :tuple, default: {nil, nil}
 
-  prop fresh_ids, :any, default: nil
-  prop feed_count, :any, default: nil
-  prop resumed_from_marker, :any, default: nil
-  data jumping_to_newest, :boolean, default: false
-  prop deferred_join_multiply_limit, :any, default: nil
-  prop cute_gif, :any, default: nil
-  prop custom_preview, :any, default: nil
+  live_attr :fresh_ids, :any, default: nil
+  live_attr :feed_count, :any, default: nil
+  live_attr :resumed_from_marker, :any, default: nil
+  live_attr :jumping_to_newest, :boolean, default: false, internal: true
+  live_attr :deferred_join_multiply_limit, :any, default: nil
+  live_attr :cute_gif, :any, default: nil
+  live_attr :custom_preview, :any, default: nil
 
-  slot bottom_or_empty_feed
+  
 
   def mount(%Phoenix.LiveView.Socket{} = socket) do
     # FIXME: assigns not available in mount

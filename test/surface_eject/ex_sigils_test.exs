@@ -13,6 +13,30 @@ defmodule SurfaceEject.ExSigilsTest do
     logs
   end
 
+  test "render_surface (Surface.LiveViewTest) modules are left whole and flagged" do
+    # the ~F only exists inside Surface's own test macro, so renaming it to ~H neither compiles (no sigil_H import) nor means anything to render_surface
+    source = ~S'''
+    defmodule My.Testing.Helpers do
+      use Surface.LiveViewTest
+
+      def render_stateless(component, assigns) do
+        render_surface do
+          ~F"""
+          <StatelessComponent module={@component} />
+          """
+        end
+      end
+    end
+    '''
+
+    assert convert(source) == source
+
+    assert Enum.any?(
+             convert_logs(source),
+             &(&1.category == :render_surface and &1.severity == :manual_required)
+           )
+  end
+
   test "~F heredoc becomes ~H with converted template" do
     source = ~S'''
     def render(assigns) do
@@ -42,6 +66,10 @@ defmodule SurfaceEject.ExSigilsTest do
 
     assert convert(~S|def a(assigns), do: ~F(<div {...@opts}>x</div>)|) ==
              ~S|def a(assigns), do: ~H(<div {@opts}>x</div>)|
+
+    # the empty template (blank stub renders)
+    assert convert(~S|def render(assigns), do: ~F""|) ==
+             ~S|def render(assigns), do: ~H""|
   end
 
   test "multiple sigils in one file all convert" do
