@@ -44,7 +44,8 @@ defmodule SurfaceEject.CLI do
           apply: :boolean,
           verbose: :boolean,
           debug: :boolean,
-          report: :string
+          report: :string,
+          out: :string
         ]
       )
 
@@ -55,7 +56,12 @@ defmodule SurfaceEject.CLI do
     apply? = opts[:apply] || false
     debug? = opts[:debug] || false
     scan_paths = Keyword.get_values(opts, :scan_path)
-    excludes = Keyword.get_values(opts, :exclude)
+    out_dir = opts[:out]
+
+    # an --out dump nested inside the source tree must not be scanned
+    excludes =
+      Keyword.get_values(opts, :exclude) ++
+        if out_dir, do: [Path.basename(out_dir)], else: []
 
     status("Listing files (excluding: #{Enum.join(Files.default_excludes() ++ excludes, ", ")})…")
 
@@ -86,7 +92,14 @@ defmodule SurfaceEject.CLI do
     if opts[:verbose], do: verbose_logs(logs)
 
     # dry runs write NOTHING unless a report path is explicitly requested
-    if report_path = opts[:report], do: File.write!(report_path, md)
+    if report_path = opts[:report] do
+      File.mkdir_p!(Path.dirname(report_path))
+      File.write!(report_path, md)
+    end
+
+    # --out: dump would-be outputs (renames applied) as a tree relative to
+    # --path — droppable under lib/ or added to elixirc_paths to try compiling
+    if out_dir && not apply?, do: dump(actions, path, out_dir)
 
     if apply? do
       apply_actions(actions)
@@ -112,6 +125,22 @@ defmodule SurfaceEject.CLI do
 
   # liveness/progress goes to stderr so stdout stays a clean report
   defp status(message), do: IO.puts(:stderr, message)
+
+  defp dump(actions, path_root, out_dir) do
+    Enum.each(actions, fn
+      {file, {:write, content, _logs}} -> dump_file(out_dir, path_root, file, content)
+      {_file, {:move, new_path, content, _logs}} -> dump_file(out_dir, path_root, new_path, content)
+      {_file, _other} -> :ok
+    end)
+
+    status("Converted files dumped to #{out_dir}/")
+  end
+
+  defp dump_file(out_dir, path_root, file, content) do
+    target = Path.join(out_dir, Path.relative_to(file, path_root))
+    File.mkdir_p!(Path.dirname(target))
+    File.write!(target, content)
+  end
 
   defp apply_actions(actions) do
     Enum.each(actions, fn

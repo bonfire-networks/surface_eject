@@ -67,6 +67,33 @@ defmodule SurfaceEject.CLITest do
   end
 
   @tag :tmp_dir
+  test "--out dumps converted files relative to --path (compilable subtree); source untouched",
+       %{lib: lib} do
+    before = tree_snapshot(lib)
+    # nested inside the source tree on purpose — must be auto-excluded from scans
+    out = Path.join(lib, "_converted")
+
+    capture_io(fn -> CLI.main(["--path", lib, "--out", out]) end)
+
+    # source byte-identical — still a dry run (the dump itself excepted)
+    source_after =
+      lib |> tree_snapshot() |> Map.reject(fn {path, _} -> String.contains?(path, "_converted") end)
+
+    assert source_after == before
+
+    # converted outputs relative to --path, renames applied
+    assert File.read!(Path.join(out, "page.heex")) ==
+             "<%= if @x do %><Card.render a=\"1\" /><% end %>"
+
+    assert File.read!(Path.join(out, "card.ex")) =~ "attr :a, :string"
+    refute File.exists?(Path.join(out, "page.sface"))
+
+    # a second run doesn't pick up the dump dir
+    output = capture_io(fn -> CLI.main(["--path", lib, "--out", out]) end)
+    refute output =~ "_converted"
+  end
+
+  @tag :tmp_dir
   test "--apply converts and renames", %{lib: lib} do
     capture_io(fn -> CLI.main(["--path", lib, "--apply"]) end)
 

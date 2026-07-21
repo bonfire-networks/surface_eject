@@ -73,6 +73,8 @@ Both frontends are thin shells over the same `SurfaceEject.Runner.plan/2` pipeli
 
 Everything matching `<path>/**/*.{ex,sface}` is planned; `.heex` output is never re-picked-up, and re-running on converted files is a byte-exact no-op. `deps`, `_build`, and `node_modules` segments are always excluded; `--exclude <segment>` (repeatable) adds more. `--scan-path <root>` (repeatable) adds trees that are *scanned* for component types/aliases but not converted, so you can convert a single app of an umbrella or poncho project while still resolving components defined in the others (`--path extensions/foo --scan-path extensions`).
 
+`--out DIR` (escript only) dumps the would-be converted files — renames applied — as a tree relative to `--path`, without touching the source: point `--path` at an extension's `lib/` and the dump is a droppable/compilable subtree for smoke-testing the output before any `--apply`.
+
 ### Colocated hooks (`hooks-index` subcommand)
 
 Surface's compiler collected colocated `*.hooks.js` files into a namespaced `hooks/index.js` — from Surface modules only, so converted modules silently drop out. `./surface_eject hooks-index --path extensions --out assets/hooks` regenerates the same artifact (byte-compatible format, module-named copies) from a plain file glob, keeping hooks working for converted and unconverted modules throughout the migration. Run it after any Surface compile. Migrating to LiveView's colocated `<script :type={ColocatedHook}>` can then happen per component, later, optionally.

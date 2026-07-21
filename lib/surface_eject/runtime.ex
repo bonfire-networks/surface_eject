@@ -1,6 +1,6 @@
 defmodule SurfaceEject.Runtime do
   @moduledoc """
-  Reference implementations of the tiny runtime helpers converted templates may call — the converter never *requires* them, but some transforms (like `css_class_helper`) emit calls to a function you provide.
+  Reference implementations of the tiny runtime helpers converted templates may call. The converter never *requires* them, but some transforms (like `css_class_helper`) emit calls to a function you provide.
 
   Since surface_eject is usually a dev-only dependency (`only: :dev, runtime: false`), the recommended setup is to **vendor** the helper: copy the function below into a module your templates already import (e.g. your core components) and set the profile's `css_class_helper` to its bare name. If you keep surface_eject as a full runtime dependency instead, you can point the profile straight at `"SurfaceEject.Runtime.css_class"`.
   """
