@@ -45,6 +45,7 @@ defmodule SurfaceEject.CLI do
           verbose: :boolean,
           debug: :boolean,
           report: :string,
+          status_json: :string,
           out: :string
         ]
       )
@@ -91,10 +92,19 @@ defmodule SurfaceEject.CLI do
     IO.puts(md)
     if opts[:verbose], do: verbose_logs(logs)
 
-    # dry runs write NOTHING unless a report path is explicitly requested
+    # dry runs write NOTHING unless a report/status path is explicitly requested
     if report_path = opts[:report] do
       File.mkdir_p!(Path.dirname(report_path))
       File.write!(report_path, md)
+    end
+
+    # the per-file status map is now OPTIONAL (write-only, never read back — the
+    # converter re-plans from source each run; it's a dup-ish machine view of the
+    # report for external incremental tooling). Only written when `--status-json PATH`
+    # is given, on dry-run or apply — mirroring `--report`.
+    if status_json = opts[:status_json] do
+      File.mkdir_p!(Path.dirname(status_json))
+      File.write!(status_json, Jason.encode!(Reporter.status(actions), pretty: true))
     end
 
     # --out: dump would-be outputs (renames applied) as a tree relative to
@@ -103,13 +113,8 @@ defmodule SurfaceEject.CLI do
 
     if apply? do
       apply_actions(actions)
-      # the apply-review artifacts, meant to be read alongside `git diff`
+      # the apply-review artifact, meant to be read alongside `git diff`
       unless opts[:report], do: File.write!(Path.join(path, "SURFACE_EJECT_REPORT.md"), md)
-
-      File.write!(
-        Path.join(path, ".surface_eject_status.json"),
-        Jason.encode!(Reporter.status(actions), pretty: true)
-      )
     else
       IO.puts("\nDry run — nothing written (pass --apply to convert).")
     end

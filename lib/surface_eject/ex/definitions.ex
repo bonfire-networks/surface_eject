@@ -239,6 +239,39 @@ defmodule SurfaceEject.Ex.Definitions do
   }
 
   defp rewrite_direct_surface_uses(source, ctx) do
+    if web_macro_module?(source, ctx) do
+      # The web-macro HOME (defines the `use MyWeb, :atom` shorthands from the
+      # profile's web_macros/use_atom_map — e.g. Bonfire's web.ex) is NOT a
+      # component: it must keep BOTH `use Surface.Component` (in its
+      # `stateless_component` macro) and `use Phoenix.Component` (in
+      # `function_component`) so still-Surface callers in OTHER extensions keep
+      # compiling mid-migration. So don't swap its `use Surface.*` — everything
+      # else still patches.
+      {source, []}
+    else
+      do_rewrite_direct_surface_uses(source, ctx)
+    end
+  end
+
+  # The module that DEFINES the web-macro shorthands has a `def <atom>(` (or
+  # `defmacro`) for atoms named in the profile's `use_atom_map` (keys AND values)
+  # or `web_macros` — i.e. it defines `stateless_component`/`function_component`/…
+  # rather than USING them.
+  defp web_macro_module?(source, %{profile: %{} = profile}) do
+    atoms =
+      Map.keys(Map.get(profile, :use_atom_map) || %{}) ++
+        Map.values(Map.get(profile, :use_atom_map) || %{}) ++
+        Map.keys(Map.get(profile, :web_macros) || %{})
+
+    atoms != [] and
+      Enum.any?(atoms, fn atom ->
+        source =~ ~r/\bdef(macro)?\s+#{Regex.escape(to_string(atom))}\(/
+      end)
+  end
+
+  defp web_macro_module?(_source, _ctx), do: false
+
+  defp do_rewrite_direct_surface_uses(source, ctx) do
     ast = Sourceror.parse_string!(source)
 
     {_, {patches, logs}} =

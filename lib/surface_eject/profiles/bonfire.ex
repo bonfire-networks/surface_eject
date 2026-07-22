@@ -22,15 +22,12 @@ defmodule SurfaceEject.Profiles.Bonfire do
         surface_live_view: :live_view,
         surface_live_view_child: :live_view,
         live_view_child: :live_view,
-        # plain atoms too: already-native modules (e.g. PersistentLive) must
-        # also type-resolve for call-site conversion (live_render etc.)
+        # plain atoms too: already-native modules (e.g. PersistentLive) must also type-resolve for call-site conversion (live_render etc.)
         function_component: :function_component,
         live_component: :live_component,
         live_view: :live_view
       },
-      # converted modules must compile through the context-lib-wired PLAIN
-      # macros (the Surface atoms keep the Surface stack for unconverted
-      # extensions during incremental migration) — one-token use-line rewrite
+      # converted modules must compile through the context-lib-wired PLAIN macros (the Surface atoms keep the Surface stack for unconverted extensions during incremental migration) — one-token use-line rewrite
       use_atom_map: %{
         stateless_component: :function_component,
         stateful_component: :live_component,
